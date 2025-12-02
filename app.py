@@ -75,7 +75,7 @@ def generate_data(n_samples):
     outcome = np.clip(outcome, 50, 300)
 
     # Calculate Ground Truth (for comparison, noise-free)
-    outcome_gt = (250 - 0.02 * dose ** 2 - 0.2 * age + 8.0 * sex)
+    outcome_gt = (250 - 0.02 * 90 ** 2 - 0.2 * age + 8.0 * sex)
 
     data = np.column_stack([age, sex, dose, outcome])
     data_tensor = torch.FloatTensor(data).to(device)
@@ -163,7 +163,7 @@ if st.session_state['data_tensor'] is not None:
         ax_loss.legend()
         st.pyplot(fig_loss)
 
-# Show inference UI only if model is trained
+# Show inference UI only if the model is trained
 if st.session_state['model'] is not None:
     st.divider()
     st.subheader("3. Counterfactual Inference")
