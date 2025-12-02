@@ -71,7 +71,7 @@ def generate_data(n_samples):
     dose = np.random.uniform(0, 100, n_samples)
 
     # Causal model with noise
-    outcome = (250 - 0.02 * dose ** 2 - 0.2 * age + 8.0 * sex + np.random.normal(0, 0.1, n_samples))
+    outcome = (250 - 0.02 * dose ** 2 - 0.2 * age + 8.0 * sex + np.random.normal(0, 0.01, n_samples))
     outcome = np.clip(outcome, 50, 300)
 
     # Calculate Ground Truth (for comparison, noise-free)
@@ -206,10 +206,10 @@ if st.session_state['model'] is not None:
             x_pred = model.inverse(z)
             
             # Loss: (Age, Sex Fixed) + (Dose Target) + (Regularization)
-            loss_fixed = ((x_pred[:, 0] - x_orig[:, 0]) ** 2 + (x_pred[:, 1] - x_orig[:, 1]) ** 2) * 1e6
+            loss_fixed = ((x_pred[:, 0] - x_orig[:, 0]) ** 2 + (x_pred[:, 1] - x_orig[:, 1]) ** 2) * 1e2
             loss_dose = (x_pred[:, 2] - target_dose_input) ** 2
             loss_reg = 0.5 * z.square().sum()
-            loss = 1e5 * (loss_fixed + loss_dose) + loss_reg
+            loss = 1e4 * (loss_fixed + loss_dose) + loss_reg
             
             loss.backward()
             opt_cf.step()
