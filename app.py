@@ -200,7 +200,7 @@ if st.session_state['model'] is not None:
         cf_progress = st.progress(0)
         
         # Counterfactual Optimization Loop
-        steps = 1000
+        steps = 7000
         for step in range(steps):
             opt_cf.zero_grad()
             x_pred = model.inverse(z)
