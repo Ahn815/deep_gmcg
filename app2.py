@@ -30,9 +30,9 @@ class RealNVP(nn.Module):
         def net():
             return nn.Sequential(
                 nn.Linear(dim, hidden_dim), nn.LeakyReLU(0.2),
-                nn.Linear(dim, hidden_dim), nn.LeakyReLU(0.2),
-                nn.Linear(dim, hidden_dim), nn.LeakyReLU(0.2),
-                nn.Linear(dim, dim)
+                nn.Linear(hidden_dim, hidden_dim), nn.LeakyReLU(0.2),
+                nn.Linear(hidden_dim, hidden_dim), nn.LeakyReLU(0.2),
+                nn.Linear(hidden_dim, dim)
             )
         
         self.scale_nets = nn.ModuleList([net() for _ in range(n_layers)])
@@ -65,12 +65,13 @@ class RealNVP(nn.Module):
 
 # --- 2. Dynamic Data Generation Function ---
 
-def generate_dynamic_data(n_samples, var_names, code_formula, gt_formula):
+def generate_dynamic_data(n_samples, var_names, code_formula):
     # Prepare environment for code execution
     local_vars = {'N': n_samples, 'np': np, 'D': D.MultivariateNormal, 'torch': torch}
     
     try:
         # Execute user-provided code
+        # WARNING: This uses exec() and can run arbitrary code. Use with caution.
         exec(code_formula, globals(), local_vars)
         
         # Retrieve generated variables in order
@@ -95,11 +96,12 @@ def generate_dynamic_data(n_samples, var_names, code_formula, gt_formula):
         data = np.column_stack(all_vars)
         data_tensor = torch.FloatTensor(data).to(device)
         
-        # Calculate Dimension and store names
+        # Calculate Dimension
         dim = data.shape[1] 
+
+        # Store variable names and indices for CF inference
         st.session_state['var_names'] = feature_names + ['outcome']
         st.session_state['data_col_indices'] = {name: i for i, name in enumerate(st.session_state['var_names'])}
-        st.session_state['gt_formula'] = gt_formula # Store GT formula for later use
         
         return data_tensor, dim
 
@@ -130,30 +132,21 @@ st.sidebar.markdown("### Dynamic Variable Definition")
 var_input = st.sidebar.text_input("Feature Variables (comma-separated)", "age, sex, dose")
 
 default_code = """
-# Define features (age, sex, dose) and noisy outcome
+# Define independent variables here (must use NumPy and N)
 age = np.random.randint(40, 80, N)
 sex = np.random.binomial(1, 0.5, N).astype(float)
 dose = np.random.uniform(0, 100, N)
 
+# Define Outcome (must be named 'outcome')
 outcome = (250 - 0.02 * dose ** 2 - 0.2 * age + 8.0 * sex + np.random.normal(0, 0.1, N))
 outcome = np.clip(outcome, 50, 300)
 """
-code_formula = st.sidebar.text_area("Causal Formula Code (Noisy Data)", default_code, height=300)
-
-# ⭐ NEW: Ground Truth Formula Input
-default_gt_code = """
-# Use scalar variables (e.g., age, dose) to calculate the noise-free outcome.
-# Must define 'gt_outcome'
-gt_outcome = 250 - 0.02 * dose ** 2 - 0.2 * age + 8.0 * sex
-gt_outcome = np.clip(gt_outcome, 50, 300)
-"""
-gt_formula_code = st.sidebar.text_area("Ground Truth (GT) Formula (Noise-Free)", default_gt_code, height=150)
+code_formula = st.sidebar.text_area("Causal Formula Code (NumPy)", default_code, height=300)
 st.sidebar.warning("Security Note: Code executed via 'exec' can be unsafe.")
 
 # Data Generation Button
 if st.sidebar.button("Generate Data & Initialize Model"):
-    # Pass GT formula string to generation function to be stored
-    data_tensor, dim = generate_dynamic_data(N, var_input, code_formula, gt_formula_code)
+    data_tensor, dim = generate_dynamic_data(N, var_input, code_formula)
     
     if data_tensor is not None:
         st.session_state['data_tensor'] = data_tensor
@@ -220,7 +213,7 @@ if st.session_state.get('model') is not None:
     st.subheader("3. Counterfactual Inference")
     st.markdown("Simulate **'What would have happened if the value of one variable was changed?'**")
 
-    # Optimization Steps Input
+    # --- NEW: Optimization Steps Input ---
     steps = st.number_input(
         "Optimization Steps (Higher = More Accurate, Slower)", 
         min_value=100, 
@@ -228,6 +221,7 @@ if st.session_state.get('model') is not None:
         value=1000, 
         step=100
     )
+    # ------------------------------------
 
     var_names = st.session_state['var_names']
     dim = st.session_state['dim']
@@ -249,6 +243,7 @@ if st.session_state.get('model') is not None:
     with col1:
         patient_idx = st.number_input("Select Patient ID (0 ~ N-1)", 0, N-1, 100)
     with col2:
+        # Simple max range for input
         target_val_input = st.number_input(f"Target Value for '{intervention_var_name}'", 0.0, 100.0, 90.0)
 
     if st.button("Generate Counterfactual Result"):
@@ -257,29 +252,6 @@ if st.session_state.get('model') is not None:
         
         x_orig = data_tensor[patient_idx:patient_idx+1].to(device)
         orig_vals = x_orig[0].cpu().numpy()
-        
-        # ----------------------------------------------------
-        # ⭐ GT CALCULATION (Using the stored formula)
-        # ----------------------------------------------------
-        gt_formula_code = st.session_state['gt_formula']
-        
-        # Prepare execution environment (scalar values for the specific patient)
-        gt_exec_vars = {'np': np}
-        for name, index in st.session_state['data_col_indices'].items():
-            # Use original value for fixed features, and target value for intervention
-            gt_exec_vars[name] = orig_vals[index] if name != intervention_var_name else target_val_input
-
-        local_gt_vars = {}
-        try:
-            exec(gt_formula_code, gt_exec_vars, local_gt_vars)
-            gt_outcome = local_gt_vars.get('gt_outcome')
-            if gt_outcome is None:
-                st.error("GT Formula must define 'gt_outcome'. Using Factual Outcome as fallback.")
-                gt_outcome = orig_vals[dim - 1] # Fallback to factual outcome
-        except Exception as e:
-            st.error(f"GT Formula Execution Error: {e}. Using Factual Outcome as fallback.")
-            gt_outcome = orig_vals[dim - 1] # Fallback
-        # ----------------------------------------------------
         
         # Find Latent z
         model.eval()
@@ -294,7 +266,7 @@ if st.session_state.get('model') is not None:
         # Determine the outcome index (always the last one)
         outcome_idx = dim - 1
         
-        # FIXED INDICES: All indices EXCEPT the intervention variable AND the outcome variable
+        # ⭐ FIXED INDICES: All indices EXCEPT the intervention variable AND the outcome variable
         fixed_indices = [i for i in range(dim) if i != target_idx and i != outcome_idx]
         
         # Counterfactual Optimization Loop
@@ -302,7 +274,7 @@ if st.session_state.get('model') is not None:
             opt_cf.zero_grad()
             x_pred = model.inverse(z)
             
-            # 1. Loss for FIXED variables
+            # 1. Loss for FIXED variables (Must remain close to original factual data)
             loss_fixed_components = []
             if fixed_indices:
                 for i in fixed_indices:
@@ -312,10 +284,10 @@ if st.session_state.get('model') is not None:
             else: 
                 loss_fixed = 0
             
-            # 2. Loss for TARGET variable
+            # 2. Loss for TARGET variable (Must match the intervened value)
             loss_target = (x_pred[:, target_idx] - target_val_input) ** 2
             
-            # 3. Regularization Loss
+            # 3. Regularization Loss (Keeps z close to the origin/prior mean)
             loss_reg = 0.5 * z.square().sum()
             
             # Total Loss
@@ -361,10 +333,7 @@ if st.session_state.get('model') is not None:
         width = 0.35
         
         ax.bar(x_pos - width/2, orig_vals, width, label='Original (Factual)', color='skyblue')
-        ax.bar(x_pos + width/2, cf_vals, width, label='Counterfactual (Predicted)', color='lightcoral')
-        
-        # ⭐ PLOT GT LINE ⭐
-        ax.axhline(y=gt_outcome, color='green', linestyle='--', linewidth=2, label=f'Ground Truth ({gt_outcome:.2f})')
+        ax.bar(x_pos + width/2, cf_vals, width, label='Counterfactual', color='lightcoral')
         
         ax.set_xticks(x_pos)
         ax.set_xticklabels([name.capitalize() for name in var_names])
