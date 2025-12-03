@@ -280,7 +280,7 @@ if st.session_state.get('model') is not None:
                 for i in fixed_indices:
                     loss_fixed_components.append((x_pred[:, i] - x_orig[:, i]) ** 2)
                 
-                loss_fixed = torch.stack(loss_fixed_components, dim=1).sum(dim=1) * 1e6 # High penalty
+                loss_fixed = torch.stack(loss_fixed_components, dim=1).sum(dim=1) * 1e2 # High penalty
             else: 
                 loss_fixed = 0
             
