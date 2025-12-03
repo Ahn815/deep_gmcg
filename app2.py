@@ -217,8 +217,8 @@ if st.session_state.get('model') is not None:
     steps = st.number_input(
         "Optimization Steps (Higher = More Accurate, Slower)", 
         min_value=100, 
-        max_value=10000, 
-        value=1000, 
+        max_value=20000, 
+        value=7000, 
         step=100
     )
     # ------------------------------------
