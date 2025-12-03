@@ -326,20 +326,58 @@ if st.session_state.get('model') is not None:
                 delta_color=delta_color
             )
         
-        # Plot Graph (Simplified Bar Chart)
-        fig, ax = plt.subplots(figsize=(12, 5))
+        # ----------------------------------------------------
+        # ⭐ MODIFIED PLOTTING LOGIC: Subplots
+        # ----------------------------------------------------
         
-        x_pos = np.arange(dim)
-        width = 0.35
+        # Create subplots dynamically based on dimension
+        # width increases with dim
+        fig, axes = plt.subplots(1, dim, figsize=(dim * 4, 6))
         
-        ax.bar(x_pos - width/2, orig_vals, width, label='Original (Factual)', color='skyblue')
-        ax.bar(x_pos + width/2, cf_vals, width, label='Counterfactual', color='lightcoral')
+        # If dim is 1, axes is not iterable, make it a list
+        if dim == 1:
+            axes = [axes]
+            
+        colors = ['#skyblue', '#lightcoral']
+        labels = ['Original', 'Counterfactual']
+
+        for i, ax in enumerate(axes):
+            var_name = var_names[i]
+            
+            # Prepare data for this specific variable
+            vals = [orig_vals[i], cf_vals[i]]
+            
+            # Plot individual bar chart
+            bars = ax.bar(labels, vals, color=colors)
+            
+            # Formatting
+            ax.set_title(var_name.capitalize(), fontsize=14, fontweight='bold')
+            ax.set_ylabel("Value")
+            
+            # Add value labels on top of bars
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{height:.2f}',
+                        ha='center', va='bottom', fontsize=10)
+            
+            # Highlight Intervention Variable
+            if i == target_idx:
+                ax.set_title(f"{var_name.capitalize()} (Target)", color='blue', fontweight='bold')
+                ax.spines['bottom'].set_color('blue')
+                ax.spines['top'].set_color('blue')
+                ax.spines['left'].set_color('blue')
+                ax.spines['right'].set_color('blue')
+                ax.spines['bottom'].set_linewidth(2)
+                ax.spines['top'].set_linewidth(2)
+                ax.spines['left'].set_linewidth(2)
+                ax.spines['right'].set_linewidth(2)
+
+            # Highlight Outcome Variable
+            if var_name == 'outcome':
+                ax.set_title(f"{var_name.capitalize()} (Predicted)", color='red', fontweight='bold')
         
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels([name.capitalize() for name in var_names])
-        ax.set_ylabel("Values")
-        ax.set_title(f"Counterfactual: Changing {intervention_var_name} to {target_val_input:.2f} (Steps: {steps})")
-        ax.legend()
+        plt.tight_layout()
         st.pyplot(fig)
 
 elif st.session_state.get('data_tensor') is None:
