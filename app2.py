@@ -213,6 +213,16 @@ if st.session_state.get('model') is not None:
     st.subheader("3. Counterfactual Inference")
     st.markdown("Simulate **'What would have happened if the value of one variable was changed?'**")
 
+    # --- NEW: Optimization Steps Input ---
+    steps = st.number_input(
+        "Optimization Steps (Higher = More Accurate, Slower)", 
+        min_value=100, 
+        max_value=10000, 
+        value=1000, 
+        step=100
+    )
+    # ------------------------------------
+
     var_names = st.session_state['var_names']
     dim = st.session_state['dim']
     
@@ -252,7 +262,6 @@ if st.session_state.get('model') is not None:
         opt_cf = optim.Adam([z], lr=2e-3)
 
         cf_progress = st.progress(0)
-        steps = 6000
         
         # Determine the outcome index (always the last one)
         outcome_idx = dim - 1
@@ -329,7 +338,7 @@ if st.session_state.get('model') is not None:
         ax.set_xticks(x_pos)
         ax.set_xticklabels([name.capitalize() for name in var_names])
         ax.set_ylabel("Values")
-        ax.set_title(f"Counterfactual: Changing {intervention_var_name} to {target_val_input:.2f}")
+        ax.set_title(f"Counterfactual: Changing {intervention_var_name} to {target_val_input:.2f} (Steps: {steps})")
         ax.legend()
         st.pyplot(fig)
 
