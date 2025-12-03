@@ -8,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Page Configuration
-st.set_page_config(page_title="RealNVP Causal Inference Simulator", layout="wide")
+st.set_page_config(page_title="Dynamic RealNVP Causal Inference Simulator", layout="wide")
 
 # Device Configuration
 device = torch.device("cpu")
@@ -233,6 +233,7 @@ if st.session_state.get('model') is not None:
     with col1:
         patient_idx = st.number_input("Select Patient ID (0 ~ N-1)", 0, N-1, 100)
     with col2:
+        # Simple max range for input
         target_val_input = st.number_input(f"Target Value for '{intervention_var_name}'", 0.0, 100.0, 90.0)
 
     if st.button("Generate Counterfactual Result"):
@@ -251,31 +252,33 @@ if st.session_state.get('model') is not None:
         opt_cf = optim.Adam([z], lr=2e-3)
 
         cf_progress = st.progress(0)
-        
         steps = 1000
-        # Determine which indices are FIXED (all variables EXCEPT the intervention variable)
-        fixed_indices = [i for i in range(dim) if i != target_idx]
+        
+        # Determine the outcome index (always the last one)
+        outcome_idx = dim - 1
+        
+        # ⭐ FIXED INDICES: All indices EXCEPT the intervention variable AND the outcome variable
+        fixed_indices = [i for i in range(dim) if i != target_idx and i != outcome_idx]
         
         # Counterfactual Optimization Loop
         for step in range(steps):
             opt_cf.zero_grad()
             x_pred = model.inverse(z)
             
-            # 1. Loss for FIXED variables (L1, L2, L_outcome, etc.)
+            # 1. Loss for FIXED variables (Must remain close to original factual data)
             loss_fixed_components = []
-            for i in fixed_indices:
-                loss_fixed_components.append((x_pred[:, i] - x_orig[:, i]) ** 2)
-            
-            # Sum up all squared errors for fixed variables
-            if loss_fixed_components:
-                loss_fixed = torch.stack(loss_fixed_components, dim=1).sum(dim=1) * 1e6
-            else: # Should not happen if dim > 1, but for safety
+            if fixed_indices:
+                for i in fixed_indices:
+                    loss_fixed_components.append((x_pred[:, i] - x_orig[:, i]) ** 2)
+                
+                loss_fixed = torch.stack(loss_fixed_components, dim=1).sum(dim=1) * 1e6 # High penalty
+            else: 
                 loss_fixed = 0
             
-            # 2. Loss for TARGET variable (Intervention variable)
+            # 2. Loss for TARGET variable (Must match the intervened value)
             loss_target = (x_pred[:, target_idx] - target_val_input) ** 2
             
-            # 3. Regularization Loss
+            # 3. Regularization Loss (Keeps z close to the origin/prior mean)
             loss_reg = 0.5 * z.square().sum()
             
             # Total Loss
