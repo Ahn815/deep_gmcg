@@ -252,7 +252,7 @@ if st.session_state.get('model') is not None:
         opt_cf = optim.Adam([z], lr=2e-3)
 
         cf_progress = st.progress(0)
-        steps = 1000
+        steps = 6000
         
         # Determine the outcome index (always the last one)
         outcome_idx = dim - 1
