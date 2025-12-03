@@ -213,7 +213,7 @@ if st.session_state.get('model') is not None:
     st.subheader("3. Counterfactual Inference")
     st.markdown("Simulate **'What would have happened if the value of one variable was changed?'**")
 
-    # --- NEW: Optimization Steps Input ---
+    # --- Optimization Steps Input ---
     steps = st.number_input(
         "Optimization Steps (Higher = More Accurate, Slower)", 
         min_value=100, 
@@ -266,7 +266,7 @@ if st.session_state.get('model') is not None:
         # Determine the outcome index (always the last one)
         outcome_idx = dim - 1
         
-        # ⭐ FIXED INDICES: All indices EXCEPT the intervention variable AND the outcome variable
+        # FIXED INDICES: All indices EXCEPT the intervention variable AND the outcome variable
         fixed_indices = [i for i in range(dim) if i != target_idx and i != outcome_idx]
         
         # Counterfactual Optimization Loop
@@ -274,20 +274,20 @@ if st.session_state.get('model') is not None:
             opt_cf.zero_grad()
             x_pred = model.inverse(z)
             
-            # 1. Loss for FIXED variables (Must remain close to original factual data)
+            # 1. Loss for FIXED variables
             loss_fixed_components = []
             if fixed_indices:
                 for i in fixed_indices:
                     loss_fixed_components.append((x_pred[:, i] - x_orig[:, i]) ** 2)
                 
-                loss_fixed = torch.stack(loss_fixed_components, dim=1).sum(dim=1) * 1e2 # High penalty
+                loss_fixed = torch.stack(loss_fixed_components, dim=1).sum(dim=1) * 1e2 
             else: 
                 loss_fixed = 0
             
-            # 2. Loss for TARGET variable (Must match the intervened value)
+            # 2. Loss for TARGET variable
             loss_target = (x_pred[:, target_idx] - target_val_input) ** 2
             
-            # 3. Regularization Loss (Keeps z close to the origin/prior mean)
+            # 3. Regularization Loss
             loss_reg = 0.5 * z.square().sum()
             
             # Total Loss
@@ -327,14 +327,13 @@ if st.session_state.get('model') is not None:
             )
         
         # ----------------------------------------------------
-        # ⭐ MODIFIED PLOTTING LOGIC: Subplots
+        # ⭐ FIXED: Matplotlib Bar Color Issue
         # ----------------------------------------------------
         
-        # Create subplots dynamically based on dimension
-        # width increases with dim
+        # Create subplots dynamically
         fig, axes = plt.subplots(1, dim, figsize=(dim * 4, 6))
         
-        # If dim is 1, axes is not iterable, make it a list
+        # Handle dim=1 case (axes is not iterable)
         if dim == 1:
             axes = [axes]
             
@@ -344,17 +343,19 @@ if st.session_state.get('model') is not None:
         for i, ax in enumerate(axes):
             var_name = var_names[i]
             
-            # Prepare data for this specific variable
-            vals = [orig_vals[i], cf_vals[i]]
+            # Safe float conversion
+            vals = [float(orig_vals[i]), float(cf_vals[i])]
             
-            # Plot individual bar chart
-            bars = ax.bar(labels, vals, color=colors)
+            # ⭐ FIX: Do not pass 'color' as list to bar(). Set it manually afterwards.
+            bars = ax.bar(labels, vals)
+            bars[0].set_color(colors[0])
+            bars[1].set_color(colors[1])
             
             # Formatting
             ax.set_title(var_name.capitalize(), fontsize=14, fontweight='bold')
             ax.set_ylabel("Value")
             
-            # Add value labels on top of bars
+            # Add value labels
             for bar in bars:
                 height = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width()/2., height,
@@ -364,14 +365,9 @@ if st.session_state.get('model') is not None:
             # Highlight Intervention Variable
             if i == target_idx:
                 ax.set_title(f"{var_name.capitalize()} (Target)", color='blue', fontweight='bold')
-                ax.spines['bottom'].set_color('blue')
-                ax.spines['top'].set_color('blue')
-                ax.spines['left'].set_color('blue')
-                ax.spines['right'].set_color('blue')
-                ax.spines['bottom'].set_linewidth(2)
-                ax.spines['top'].set_linewidth(2)
-                ax.spines['left'].set_linewidth(2)
-                ax.spines['right'].set_linewidth(2)
+                for spine in ax.spines.values():
+                    spine.set_edgecolor('blue')
+                    spine.set_linewidth(2)
 
             # Highlight Outcome Variable
             if var_name == 'outcome':
