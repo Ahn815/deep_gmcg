@@ -337,7 +337,7 @@ if st.session_state.get('model') is not None:
         if dim == 1:
             axes = [axes]
             
-        colors = ['#skyblue', '#lightcoral']
+        colors = ['skyblue', 'lightcoral']
         labels = ['Original', 'Counterfactual']
 
         for i, ax in enumerate(axes):
