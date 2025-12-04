@@ -7,6 +7,7 @@ import torch.distributions as D
 from torch.utils.data import DataLoader, TensorDataset, random_split
 import numpy as np
 import matplotlib.pyplot as plt
+import io
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -100,20 +101,17 @@ def generate_clinical_longitudinal(n=500):
     """Option 1-B: 8-Week Longitudinal Data"""
     np.random.seed(42)
 
-    # 1. Demographics
     ids = np.random.randint(10000000, 99999999, n)
     ages = np.random.randint(20, 80, n)
-    sexes = np.random.randint(0, 2, n)  # 0: Female, 1: Male
+    sexes = np.random.randint(0, 2, n)
     doses = np.random.choice([0, 10, 20, 30, 40, 50], n) 
 
     weeks_data = []
 
-    # 2. Simulation Loop
     for i in range(n):
         age = ages[i]
         dose = doses[i]
         
-        # Week 1 (Baseline)
         w1 = 5.0 + (age - 40) * 0.05 + np.random.normal(0, 1.0)
         w1 = np.clip(w1, 2, 9)
         
@@ -124,11 +122,9 @@ def generate_clinical_longitudinal(n=500):
         treatment_effect = (dose / 50.0) * 0.6 
         delta = natural_worsening - treatment_effect
         
-        for t in range(7): # Week 2 ~ 8
+        for t in range(7): 
             noise = np.random.normal(0, 0.4)
             current_val += delta + noise
-            # Allow some negative values if improvement is strong, just for plotting demo
-            # current_val = np.clip(current_val, 0, 10) 
             patient_trajectory.append(round(current_val, 2))
             
         weeks_data.append(patient_trajectory)
@@ -187,7 +183,6 @@ if data_source == "Option 1: Synthetic Simulation":
 age = np.random.randint(40, 80, N)
 sex = np.random.binomial(1, 0.5, N).astype(float)
 dose = np.random.uniform(0, 100, N)
-# Allow outcome to be negative for visualization test
 outcome = (100 - 0.5 * dose - 0.2 * age + 10.0 * sex + np.random.normal(0, 5.0, N))
 """
         code_formula = st.sidebar.text_area("Code Formula", default_code_a, height=150)
@@ -213,8 +208,18 @@ outcome = (100 - 0.5 * dose - 0.2 * age + 10.0 * sex + np.random.normal(0, 5.0, 
             df = generate_clinical_longitudinal(N_b)
             if df is not None:
                 st.sidebar.success(f"Generated {N_b} samples (Type B).")
-                training_cols = [c for c in df.columns if c != 'Id']
                 
+                # --- NEW: DOWNLOAD BUTTON ---
+                csv = df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Generated Data (CSV)",
+                    data=csv,
+                    file_name="clinical_trial_data_8weeks.csv",
+                    mime="text/csv",
+                )
+                # -----------------------------
+
+                training_cols = [c for c in df.columns if c != 'Id']
                 st.session_state['col_config'] = {
                     'pre': ['Age', 'Sex'],
                     'int': ['Dose'],
@@ -273,8 +278,8 @@ if df is not None and data_source == "Option 2: Clinical Data Upload":
 # --- TRAINING ---
 if st.session_state['data_tensor'] is not None:
     st.divider()
-    config = st.session_state.get('col_config', {})
     
+    config = st.session_state.get('col_config', {})
     if not config:
         st.warning("Variable configuration missing.")
     else:
@@ -359,7 +364,6 @@ if st.session_state['model'] is not None:
         steps = st.number_input("Optimization Steps", 100, 10000, 2000, 100)
 
         if st.button("Run Simulation"):
-            # Optimization
             z_init, _ = model(x_orig)
             z = z_init.clone().detach().requires_grad_(True)
             opt = optim.Adam([z], lr=0.01)
@@ -395,68 +399,73 @@ if st.session_state['model'] is not None:
             
             st.write("### Result Comparison")
             
-            # --- Visualization with Grid Layout & Fixed Axes ---
+            # Outcome Metrics
+            out_indices = [var_names.index(c) for c in config['out']]
+            cols = st.columns(len(out_indices))
+            for i, idx in enumerate(out_indices):
+                name = var_names[idx]
+                val_cf = cf_np[idx]
+                val_orig = orig_np[idx]
+                delta = val_cf - val_orig
+                with cols[i % len(cols)]: 
+                    st.metric(f"{name}", f"{val_cf:.2f}", f"{delta:+.2f}")
             
-            # 1. Calculate Global Data Min/Max for plotting limits
+            # --- IMPROVED VISUALIZATION ---
+            
             data_min = data.min(dim=0).values.cpu().numpy()
             data_max = data.max(dim=0).values.cpu().numpy()
             
-            # 2. Setup Grid Layout (Max 4 per row)
+            # Grid Layout: 4 cols per row
             cols_per_row = 4
             num_rows = (dim + cols_per_row - 1) // cols_per_row
             
             fig, axes = plt.subplots(num_rows, cols_per_row, figsize=(20, 5 * num_rows))
             
-            # Flatten axes for easy iteration
+            # Helper to handle single vs multiple axes
             if num_rows == 1 and cols_per_row == 1:
                 axes_flat = [axes]
-            elif num_rows == 1 or cols_per_row == 1:
-                axes_flat = axes
-            else:
+            elif hasattr(axes, 'flatten'):
                 axes_flat = axes.flatten()
+            else:
+                axes_flat = axes
             
             colors = ['skyblue', 'lightcoral']
             labels = ['Orig', 'CF']
 
-            out_indices = [var_names.index(c) for c in config['out']]
-
             for i in range(len(axes_flat)):
                 ax = axes_flat[i]
                 
-                if i < dim: # Valid subplot
+                if i < dim: # Valid variable index
                     var_name = var_names[i]
                     vals = [orig_np[i], cf_np[i]]
                     
-                    # Bar Plot
                     bars = ax.bar(labels, vals)
                     bars[0].set_color(colors[0])
                     bars[1].set_color(colors[1])
                     
-                    # Add zero line for negative values
+                    # Zero line for negative values
                     ax.axhline(0, color='black', linewidth=0.8, alpha=0.5)
                     
-                    # Set Robust Y-Limits (Training Data Min/Max + Margin)
-                    y_min_limit = data_min[i]
-                    y_max_limit = data_max[i]
-                    
-                    # Add 20% margin
-                    span = y_max_limit - y_min_limit
+                    # Robust Y-Limits
+                    y_min, y_max = data_min[i], data_max[i]
+                    span = y_max - y_min
                     if span == 0: span = 1.0
                     margin = span * 0.2
                     
-                    ax.set_ylim(y_min_limit - margin, y_max_limit + margin)
+                    ax.set_ylim(y_min - margin, y_max + margin)
+                    ax.set_title(var_name, fontsize=11, fontweight='bold')
                     
-                    ax.set_title(var_name, fontsize=12, fontweight='bold')
-                    
-                    # Annotations
+                    # Clean Annotations
                     for bar in bars:
                         h = bar.get_height()
-                        # Position text slightly above or below based on sign
+                        # Offset text slightly
                         offset = margin * 0.05
-                        pos = h + offset if h >= 0 else h - offset * 3
-                        ax.text(bar.get_x() + bar.get_width()/2, pos, f"{h:.2f}", ha='center', va='bottom', fontsize=9)
+                        # If positive, put text above; if negative, put text below
+                        xy_pos = (bar.get_x() + bar.get_width()/2, h + offset if h >= 0 else h - offset*3)
+                        
+                        ax.annotate(f"{h:.2f}", xy=xy_pos, ha='center', va='bottom', fontsize=8)
                     
-                    # Highlight Roles
+                    # Highlight
                     if i == target_idx:
                         ax.set_title(f"{var_name} (Target)", color='blue', fontweight='bold')
                         for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
@@ -464,7 +473,6 @@ if st.session_state['model'] is not None:
                         ax.set_title(f"{var_name} (Outcome)", color='red', fontweight='bold')
                         
                 else:
-                    # Hide unused subplots
                     ax.axis('off')
 
             plt.tight_layout()
