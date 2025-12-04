@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="SoloCausal AI: Precision ITE Platform", 
+    page_title="SoloCausal AI: Longitudinal Analysis", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -18,20 +18,19 @@ st.set_page_config(
 # Device Configuration
 device = torch.device("cpu")
 
-# --- 1. RealNVP Model Class (Core Engine) ---
+# --- 1. RealNVP Model Class ---
 class RealNVP(nn.Module):
     def __init__(self, dim=4, n_layers=4, hidden_dim=128):
         super().__init__()
         self.dim = dim
         self.prior = D.MultivariateNormal(torch.zeros(dim, device=device), torch.eye(dim, device=device))
         
-        # Alternating binary masks for coupling layers
+        # Alternating binary masks
         mask = torch.zeros(dim, device=device)
         mask[::2] = 1
         masks = [mask] + [1 - mask] * (n_layers - 1)
         self.masks = torch.stack(masks[:n_layers])
 
-        # Network builder
         def net():
             return nn.Sequential(
                 nn.Linear(dim, hidden_dim), nn.LeakyReLU(0.2),
@@ -68,356 +67,294 @@ class RealNVP(nn.Module):
         log_pz = self.prior.log_prob(z)
         return log_pz + log_det
 
-# --- 2. Data Processing Functions ---
+# --- 2. Data Helper Functions ---
 
-def load_synthetic_data(n_samples, var_names, code_formula):
-    """Option 1: Generate Synthetic Data based on user formula"""
-    local_vars = {'N': n_samples, 'np': np, 'D': D.MultivariateNormal, 'torch': torch}
-    try:
-        exec(code_formula, globals(), local_vars)
-        feature_names = [name.strip() for name in var_names.split(',')]
+def generate_longitudinal_data(n_samples):
+    """Generates 8-week clinical trial data for demo."""
+    np.random.seed(42)
+    # 1. Pre-treatment (Demographics)
+    age = np.random.randint(40, 80, n_samples)
+    sex = np.random.binomial(1, 0.5, n_samples)
+    baseline_severity = np.random.uniform(50, 80, n_samples) # Initial disease score
+    
+    # 2. Intervention (Doses Week 1-8)
+    # Randomize doses to simulate different arms or adherence
+    doses = []
+    for w in range(8):
+        # Some get 0 (placebo), some get 50, some get 100
+        dose_w = np.random.choice([0, 50, 100], n_samples) 
+        doses.append(dose_w)
+    
+    doses = np.stack(doses, axis=1) # (N, 8)
+    
+    # 3. Outcomes (Score Week 1-8)
+    # Logic: Score decreases (improves) with Dose, increases with Age, correlated with previous week
+    outcomes = []
+    current_score = baseline_severity
+    
+    for w in range(8):
+        dose_effect = 0.1 * doses[:, w]
+        natural_recovery = 0.5 
         
-        if 'outcome' not in local_vars:
-             st.error("Error: Code must define 'outcome'.")
-             return None, None
+        # Next week score = Current - Dose Effect - Recovery + Noise
+        next_score = current_score - dose_effect - natural_recovery + np.random.normal(0, 1.0, n_samples)
         
-        all_vars = []
-        for name in feature_names:
-            if name not in local_vars:
-                st.error(f"Error: Variable '{name}' not found.")
-                return None, None
-            all_vars.append(local_vars[name])
-        all_vars.append(local_vars['outcome'])
+        # Age penalty (Older recover slower)
+        next_score += 0.01 * age
         
-        data = np.column_stack(all_vars)
-        final_var_names = feature_names + ['outcome']
-        return data, final_var_names
-    except Exception as e:
-        st.error(f"Generation Error: {e}")
-        return None, None
+        next_score = np.clip(next_score, 0, 100)
+        outcomes.append(next_score)
+        current_score = next_score # Update for next step
+        
+    outcomes = np.stack(outcomes, axis=1) # (N, 8)
+
+    # Combine into DataFrame
+    cols = ['Age', 'Sex', 'Baseline'] + [f'Dose_W{i+1}' for i in range(8)] + [f'Outcome_W{i+1}' for i in range(8)]
+    data = np.column_stack([age, sex, baseline_severity, doses, outcomes])
+    
+    return pd.DataFrame(data, columns=cols)
 
 def load_clinical_data(uploaded_file):
-    """Option 2: Load and preprocess Clinical Trial Data"""
     try:
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file)
         else:
             df = pd.read_excel(uploaded_file)
-        
-        # Simple preprocessing: Drop NaNs
-        df = df.dropna()
-        
-        # Only keep numeric columns (RealNVP works on continuous data)
-        numeric_df = df.select_dtypes(include=[np.number])
-        
-        if numeric_df.empty:
-            st.error("Error: No numeric columns found in the uploaded file.")
-            return None
-            
-        return numeric_df
+        df = df.dropna().select_dtypes(include=[np.number])
+        return df
     except Exception as e:
         st.error(f"File Loading Error: {e}")
         return None
 
-# --- 3. Streamlit UI Layout ---
+# --- 3. Streamlit UI ---
 
-st.title("🧬 SoloCausal AI")
-st.markdown("### Precision ITE (Individual Treatment Effect) Estimation Platform")
+st.title("📈 SoloCausal AI: Longitudinal Analysis")
 st.markdown("""
-**SoloCausal AI** goes beyond average clinical results to identify **individual causal effects**.
-By simulating counterfactuals ("What if?"), we help optimize treatment strategies for every single patient.
+**Simulate Multi-Week Clinical Trials.** Define Pre-treatment variables (Fixed), Intervention trajectory (Doses), and observe the counterfactual Outcome trajectory.
 """)
 
-# Initialize Session State
+# Session State Init
 if 'model' not in st.session_state: st.session_state['model'] = None
 if 'data_tensor' not in st.session_state: st.session_state['data_tensor'] = None
-if 'var_names' not in st.session_state: st.session_state['var_names'] = []
+if 'col_config' not in st.session_state: st.session_state['col_config'] = {}
 
-# --- SIDEBAR: DATA LOADING ---
+# --- SIDEBAR: DATA ---
 st.sidebar.header("1. Data Source")
-data_option = st.sidebar.radio(
-    "Select Data Mode:",
-    ("Option 1: Synthetic Simulation", "Option 2: Clinical Data Upload")
-)
+data_option = st.sidebar.radio("Mode:", ("Option 1: 8-Week Trial Demo", "Option 2: Upload Data"))
 
-# Global variables to hold loaded data
-data_array = None
-var_names = []
+df = None
 
-if data_option == "Option 1: Synthetic Simulation":
-    st.sidebar.subheader("Synthetic Generator")
-    N = st.sidebar.slider("Sample Size (N)", 500, 10000, 5000)
-    var_input = st.sidebar.text_input("Features (comma-separated)", "age, sex, dose")
-    
-    default_code = """
-# Simulate an 8-week clinical trial
-age = np.random.randint(40, 80, N)
-sex = np.random.binomial(1, 0.5, N).astype(float)
-# Accumulated dose over 8 weeks (0 to 800mg)
-dose = np.random.uniform(0, 800, N) 
+if data_option == "Option 1: 8-Week Trial Demo":
+    N = st.sidebar.slider("Sample Size", 500, 5000, 1000)
+    if st.sidebar.button("Generate Demo Data"):
+        df = generate_longitudinal_data(N)
+        st.sidebar.success(f"Generated {N} patients (8 Weeks).")
 
-# Outcome: Reduction in symptoms (Higher is better)
-# Non-linear effect of dose, influenced by age and sex
-outcome = (100 
-           + 0.2 * dose 
-           - 0.0001 * (dose - 400)**2 
-           - 0.5 * age 
-           + 10.0 * sex 
-           + np.random.normal(0, 10.0, N))
-outcome = np.clip(outcome, 0, 200)
-"""
-    code_formula = st.sidebar.text_area("Generation Code (NumPy)", default_code, height=200)
-    
-    if st.sidebar.button("Generate Synthetic Data"):
-        data_array, var_names = load_synthetic_data(N, var_input, code_formula)
-        if data_array is not None:
-            st.session_state['data_tensor'] = torch.FloatTensor(data_array).to(device)
-            st.session_state['var_names'] = var_names
-            st.session_state['model'] = None # Reset model
-            st.success(f"Generated {N} samples. Variables: {var_names}")
-
-elif data_option == "Option 2: Clinical Data Upload":
-    st.sidebar.subheader("Clinical Data Loader")
-    uploaded_file = st.sidebar.file_uploader("Upload Trial Data (CSV/Excel)", type=['csv', 'xlsx'])
-    
+elif data_option == "Option 2: Upload Data":
+    uploaded_file = st.sidebar.file_uploader("Upload CSV/Excel", type=['csv', 'xlsx'])
     if uploaded_file:
         df = load_clinical_data(uploaded_file)
         if df is not None:
-            st.sidebar.write("### Select Columns")
-            all_cols = df.columns.tolist()
-            
-            # User defines Features (X) and Outcome (Y)
-            feature_cols = st.sidebar.multiselect("Features (e.g., Demographics, Dose)", all_cols, default=all_cols[:-1])
-            outcome_col = st.sidebar.selectbox("Primary Outcome (Y)", all_cols, index=len(all_cols)-1)
-            
-            if st.sidebar.button("Load & Process Data"):
-                if not feature_cols:
-                    st.sidebar.error("Please select at least one feature.")
-                else:
-                    selected_cols = feature_cols + [outcome_col]
-                    final_data = df[selected_cols].values
-                    
-                    st.session_state['data_tensor'] = torch.FloatTensor(final_data).to(device)
-                    st.session_state['var_names'] = selected_cols
-                    st.session_state['model'] = None # Reset model
-                    st.success(f"Loaded {len(final_data)} patients. Dim: {len(selected_cols)}")
-                    st.dataframe(df[selected_cols].head(3))
+            st.sidebar.success("File loaded successfully.")
 
-# --- MAIN AREA: TRAINING ---
-
-if st.session_state['data_tensor'] is not None:
-    data_tensor = st.session_state['data_tensor']
-    var_names = st.session_state['var_names']
-    dim = data_tensor.shape[1]
-    N_samples = data_tensor.shape[0]
-    
+# --- COLUMN CONFIGURATION (CRITICAL STEP) ---
+if df is not None:
     st.divider()
-    st.subheader(f"2. Model Training (N={N_samples}, Features={dim})")
+    st.subheader("2. Variable Configuration (Crucial Step)")
+    st.info("Assign columns to their specific roles to define the Causal Structure.")
     
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        epochs = st.number_input("Training Epochs", 10, 5000, 300)
-    with col2:
-        lr = st.number_input("Learning Rate", 1e-5, 1e-2, 1e-3, format="%.5f")
-    with col3:
-        # Small Data Strategy
-        complexity = st.selectbox("Model Complexity Strategy", ["Standard (Big Data)", "Lite (Small Data / Anti-Overfitting)"])
+    all_cols = df.columns.tolist()
+    
+    c1, c2, c3 = st.columns(3)
+    
+    with c1:
+        st.markdown("**1. Pre-treatment (Fixed)**")
+        st.caption("Baseline, Demographics (Age, Sex)")
+        pre_cols = st.multiselect("Select Pre-treatment", all_cols, default=all_cols[:3] if data_option=="Option 1: 8-Week Trial Demo" else [])
         
-    if complexity == "Standard (Big Data)":
-        n_layers, hidden_dim, weight_decay = 4, 64, 0.0
-    else:
-        # Lighter model with Regularization for small N
-        n_layers, hidden_dim, weight_decay = 2, 32, 1e-3 
+    with c2:
+        st.markdown("**2. Interventions (Changeable)**")
+        st.caption("Doses, Treatment Arms (Week 1-8)")
+        # Auto-detect 'Dose' columns for demo
+        def_int = [c for c in all_cols if 'Dose' in c] if data_option=="Option 1: 8-Week Trial Demo" else []
+        int_cols = st.multiselect("Select Interventions", all_cols, default=def_int)
+        
+    with c3:
+        st.markdown("**3. Outcomes (Predicted)**")
+        st.caption("Endpoints, Biomarkers (Week 1-8)")
+        # Auto-detect 'Outcome' columns for demo
+        def_out = [c for c in all_cols if 'Outcome' in c] if data_option=="Option 1: 8-Week Trial Demo" else []
+        out_cols = st.multiselect("Select Outcomes", all_cols, default=def_out)
 
-    if st.button("Initialize & Train SoloCausal Model"):
-        # Train/Val Split
-        train_size = int(0.8 * N_samples)
-        if train_size < 1: train_size = 1 # Safety check
+    if st.button("Confirm & Process Data"):
+        if not pre_cols or not int_cols or not out_cols:
+            st.error("Please select at least one column for each category.")
+        else:
+            # Reorder DataFrame: [Pre | Int | Out] for easier tensor indexing
+            ordered_cols = pre_cols + int_cols + out_cols
+            ordered_data = df[ordered_cols].values
+            
+            # Save config
+            st.session_state['data_tensor'] = torch.FloatTensor(ordered_data).to(device)
+            st.session_state['col_config'] = {
+                'pre': pre_cols,
+                'int': int_cols,
+                'out': out_cols,
+                'all': ordered_cols,
+                # Store index ranges
+                'idx_pre': list(range(0, len(pre_cols))),
+                'idx_int': list(range(len(pre_cols), len(pre_cols)+len(int_cols))),
+                'idx_out': list(range(len(pre_cols)+len(int_cols), len(ordered_cols)))
+            }
+            st.session_state['model'] = None
+            st.success(f"Data Prepared. Dimension: {len(ordered_cols)}")
+            st.dataframe(df[ordered_cols].head(3))
+
+# --- TRAINING ---
+if st.session_state['data_tensor'] is not None:
+    st.divider()
+    config = st.session_state['col_config']
+    dim = len(config['all'])
+    
+    st.subheader(f"3. Model Training (Dim={dim})")
+    
+    if st.button("Train SoloCausal Model"):
+        data_tensor = st.session_state['data_tensor']
         
-        train_data, val_data = random_split(data_tensor, [train_size, N_samples - train_size])
+        # Simple training config
+        model = RealNVP(dim=dim, n_layers=4, hidden_dim=64).to(device)
+        optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
         
-        # Batch size adjustment
-        batch_size = min(128, train_size)
-        train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-        
-        # Init Model
-        model = RealNVP(dim=dim, n_layers=n_layers, hidden_dim=hidden_dim).to(device)
-        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay) # L2 Regularization
-        
-        # Training
-        progress_bar = st.progress(0)
-        status = st.empty()
-        loss_hist = []
+        train_loader = DataLoader(TensorDataset(data_tensor), batch_size=64, shuffle=True)
         
         model.train()
-        for epoch in range(1, epochs + 1):
-            epoch_loss = 0.0
+        prog = st.progress(0)
+        
+        epochs = 200
+        for epoch in range(epochs):
             for batch in train_loader:
                 optimizer.zero_grad()
-                loss = -model.log_prob(batch).mean()
+                loss = -model.log_prob(batch[0]).mean()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
-                epoch_loss += loss.item() * batch.size(0)
+            if epoch % 20 == 0: prog.progress((epoch+1)/epochs)
             
-            epoch_loss /= len(train_loader.dataset)
-            loss_hist.append(epoch_loss)
-            
-            if epoch % 10 == 0:
-                progress_bar.progress(epoch / epochs)
-                status.text(f"Epoch {epoch}/{epochs} | Loss: {epoch_loss:.4f}")
-        
-        progress_bar.progress(1.0)
+        prog.progress(1.0)
         st.session_state['model'] = model
-        st.success("Training Complete: Model is ready for ITE estimation.")
-        
-        # Loss Plot
-        fig, ax = plt.subplots(figsize=(8, 2.5))
-        ax.plot(loss_hist)
-        ax.set_title("Training Loss (NLL)")
-        ax.set_xlabel("Epoch")
-        st.pyplot(fig)
+        st.success("Model Trained!")
 
-# --- MAIN AREA: COUNTERFACTUAL INFERENCE ---
-
+# --- INFERENCE ---
 if st.session_state['model'] is not None:
     st.divider()
-    st.subheader("3. Individual Treatment Effect (ITE) Analysis")
-    st.info("Select a patient and simulate: 'How would their outcome change if we modified the treatment?'")
+    st.subheader("4. Counterfactual Simulation (Trajectory Analysis)")
     
-    var_names = st.session_state['var_names']
-    data_tensor = st.session_state['data_tensor']
     model = st.session_state['model']
-    dim = len(var_names)
+    data = st.session_state['data_tensor']
+    config = st.session_state['col_config']
     
-    # Feature/Outcome identification
-    feature_names = var_names[:-1] 
-    outcome_name = var_names[-1]   
+    # 1. Select Patient
+    pat_id = st.number_input("Select Patient ID", 0, data.shape[0]-1, 0)
     
-    # Global Min/Max for robust plotting
-    data_min = data_tensor.min(dim=0).values.cpu().numpy()
-    data_max = data_tensor.max(dim=0).values.cpu().numpy()
+    # Get Patient Data
+    x_orig = data[pat_id:pat_id+1].to(device)
+    orig_np = x_orig[0].cpu().numpy()
     
-    # UI: Patient & Intervention Selection
+    # 2. Define Intervention Scenario
+    st.markdown("### Set Counterfactual Scenario")
     col1, col2 = st.columns(2)
+    
     with col1:
-        max_id = data_tensor.shape[0] - 1
-        patient_idx = st.number_input(f"Select Patient ID (0 ~ {max_id})", 0, max_id, 0)
+        st.markdown("**Original Intervention Plan:**")
+        # Display current doses as a small chart
+        orig_doses = orig_np[config['idx_int']]
+        st.bar_chart(pd.DataFrame(orig_doses, index=config['int'], columns=["Original Dose"]))
+        
     with col2:
-        steps = st.number_input("Optimization Steps", 100, 10000, 2000, 100)
-    
-    intervention_var = st.selectbox("Select Intervention Variable (e.g., Dose, Treatment Arm)", feature_names)
-    
-    # Indices
-    target_idx = var_names.index(intervention_var)
-    outcome_idx = dim - 1
-    
-    # Target Value Selection
-    current_val = float(data_tensor[patient_idx, target_idx])
-    target_val = st.number_input(
-        f"Set Counterfactual Value for '{intervention_var}' (Current: {current_val:.2f})", 
-        value=current_val
-    )
+        st.markdown("**New Intervention Target:**")
+        target_mode = st.radio("Target Strategy:", ["Constant Dose (All Weeks)", "Percentage Change"])
+        
+        if target_mode == "Constant Dose (All Weeks)":
+            target_val = st.number_input("Set Dose for ALL weeks:", value=float(np.mean(orig_doses)))
+            target_vector = np.full_like(orig_doses, target_val)
+        else:
+            pct = st.slider("Change Dose by %:", -100, 100, 0)
+            target_vector = orig_doses * (1 + pct/100)
+            
+        st.caption(f"Targeting: {target_vector}")
 
-    if st.button("Run SoloCausal Simulation"):
-        x_orig = data_tensor[patient_idx:patient_idx+1].to(device)
-        orig_vals = x_orig[0].cpu().numpy()
-        
-        # 1. Latent Space Search (Inversion)
-        model.eval()
-        with torch.no_grad():
-            z_init, _ = model.forward(x_orig)
-        
+    if st.button("Run Simulation"):
+        # Optimization
+        z_init, _ = model(x_orig)
         z = z_init.clone().detach().requires_grad_(True)
-        # Higher LR for faster convergence during inference
-        opt_cf = optim.Adam([z], lr=0.01) 
+        opt = optim.Adam([z], lr=0.01)
         
-        # Variables to fix (All except Target and Outcome)
-        fixed_indices = [i for i in range(dim) if i != target_idx and i != outcome_idx]
+        steps = 1000
+        bar = st.progress(0)
         
-        # 2. Optimization Loop
-        cf_bar = st.progress(0)
-        for step in range(steps):
-            opt_cf.zero_grad()
+        # Tensor targets
+        target_tensor = torch.FloatTensor(target_vector).to(device)
+        
+        for i in range(steps):
+            opt.zero_grad()
             x_pred = model.inverse(z)
             
-            # Loss: Fixed variables should stay same
-            loss_fixed = 0
-            if fixed_indices:
-                diff = x_pred[:, fixed_indices] - x_orig[:, fixed_indices]
-                loss_fixed = (diff ** 2).sum() * 1e3 
+            # --- THE CORE LOGIC ---
+            # 1. Fix Pre-treatment (Strict)
+            loss_pre = ((x_pred[:, config['idx_pre']] - x_orig[:, config['idx_pre']])**2).sum() * 1000
             
-            # Loss: Target variable should match input
-            loss_target = ((x_pred[:, target_idx] - target_val) ** 2) * 1e3
+            # 2. Move Interventions to Target (Strict)
+            loss_int = ((x_pred[:, config['idx_int']] - target_tensor)**2).sum() * 1000
             
-            # Loss: Regularization (stay in probable latent space)
-            loss_reg = 0.5 * (z ** 2).sum()
+            # 3. Outcomes are FREE (No loss term)
+            # This allows outcomes to change naturally based on Pre + Int changes
             
-            loss = loss_fixed + loss_target + loss_reg
+            # 4. Regularization
+            loss_reg = 0.5 * (z**2).sum()
+            
+            loss = loss_pre + loss_int + loss_reg
             loss.backward()
-            opt_cf.step()
+            opt.step()
             
-            if step % 200 == 0: cf_bar.progress((step+1)/steps)
+            if i % 100 == 0: bar.progress((i+1)/steps)
         
-        cf_bar.progress(1.0)
+        bar.progress(1.0)
         
-        # 3. Final Prediction
+        # Results
         with torch.no_grad():
             x_cf = model.inverse(z)
-            cf_vals = x_cf[0].cpu().numpy()
-        
-        # ITE Calculation
-        factual_y = orig_vals[outcome_idx]
-        cf_y = cf_vals[outcome_idx]
-        ite = cf_y - factual_y
-        
-        # 4. Display Results
-        st.write("### Simulation Results")
-        
-        m1, m2, m3 = st.columns(3)
-        m1.metric(f"Factual {outcome_name}", f"{factual_y:.2f}")
-        m2.metric(f"Counterfactual {outcome_name}", f"{cf_y:.2f}")
-        m3.metric("Individual Treatment Effect (ITE)", f"{ite:+.2f}", 
-                  delta_color="normal" if ite == 0 else "inverse")
-        
-        # 5. Visualization (Subplots with fixed axis limits)
-        fig, axes = plt.subplots(1, dim, figsize=(dim*3, 4))
-        if dim == 1: axes = [axes]
-        
-        # Safe colors (standard names)
-        colors = ['skyblue', 'lightcoral']
-        labels = ['Factual', 'CF']
-        
-        for i, ax in enumerate(axes):
-            vals = [orig_vals[i], cf_vals[i]]
-            bars = ax.bar(labels, vals)
+            cf_np = x_cf[0].cpu().numpy()
             
-            # Manually set colors
-            bars[0].set_color(colors[0])
-            bars[1].set_color(colors[1])
-            
-            # Set Y-axis limits based on Global Min/Max of the dataset
-            # Add 10% margin for better visuals
-            margin = (data_max[i] - data_min[i]) * 0.1
-            if margin == 0: margin = 1.0 # Prevent flat limit
-            ax.set_ylim(data_min[i] - margin, data_max[i] + margin)
-            
-            ax.set_title(var_names[i])
-            
-            # Annotate values
-            for bar in bars:
-                h = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width()/2, h, f"{h:.2f}", ha='center', va='bottom', fontsize=9)
-            
-            # Highlighting
-            if i == target_idx:
-                ax.set_title(f"{var_names[i]} (Intervention)", color='blue', fontweight='bold')
-                for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
-            elif i == outcome_idx:
-                ax.set_title(f"{var_names[i]} (Outcome)", color='red', fontweight='bold')
-                
-        plt.tight_layout()
+        # Visualization
+        st.write("### Trajectory Comparison")
+        
+        # Create DataFrame for plotting
+        res_df = pd.DataFrame({
+            "Week": range(1, len(config['idx_out']) + 1),
+            "Original Outcome": orig_np[config['idx_out']],
+            "Counterfactual Outcome": cf_np[config['idx_out']]
+        })
+        
+        # Matplotlib Plot
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(res_df["Week"], res_df["Original Outcome"], 'o-', label='Original', color='skyblue', linewidth=2)
+        ax.plot(res_df["Week"], res_df["Counterfactual Outcome"], 'o-', label='Counterfactual', color='coral', linewidth=2, linestyle='--')
+        
+        ax.set_title(f"Clinical Outcome Trajectory (Patient {pat_id})")
+        ax.set_xlabel("Time (Weeks)")
+        ax.set_ylabel("Outcome Value")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
         st.pyplot(fig)
+        
+        # Data Table
+        st.write("#### Detailed Values")
+        st.dataframe(res_df)
+        
+        # Pre-treatment Check
+        st.write("#### Pre-treatment Variable Check (Should be Fixed)")
+        pre_check = pd.DataFrame([orig_np[config['idx_pre']], cf_np[config['idx_pre']]], 
+                                 columns=config['pre'], index=["Original", "Counterfactual"])
+        st.dataframe(pre_check)
 
 elif st.session_state['data_tensor'] is None:
-    st.info("👈 Please start by selecting a Data Option in the Sidebar.")
+    st.info("Start by selecting a Data Source.")
