@@ -278,4 +278,111 @@ if st.session_state.get('model') is not None:
             loss_fixed_components = []
             if fixed_indices:
                 for i in fixed_indices:
-                    loss_fixed_components.append((
+                    loss_fixed_components.append((x_pred[:, i] - x_orig[:, i]) ** 2)
+                
+                loss_fixed = torch.stack(loss_fixed_components, dim=1).sum(dim=1) * 1e2 
+            else: 
+                loss_fixed = 0
+            
+            # 2. Loss for TARGET variable
+            loss_target = (x_pred[:, target_idx] - target_val_input) ** 2
+            
+            # 3. Regularization Loss
+            loss_reg = 0.5 * z.square().sum()
+            
+            # Total Loss
+            loss = 1e5 * (loss_fixed + loss_target) + loss_reg
+            
+            loss.backward()
+            opt_cf.step()
+            
+            if step % 100 == 0:
+                cf_progress.progress((step + 1) / steps)
+        
+        cf_progress.progress(1.0)
+        
+        # Final Results
+        with torch.no_grad():
+            x_cf = model.inverse(z)
+            cf_vals = x_cf[0].cpu().numpy()
+            
+        st.write("### Result Comparison")
+        
+        # Dynamic Metric Display
+        cols = st.columns(dim)
+        for i, name in enumerate(var_names):
+            change = cf_vals[i] - orig_vals[i]
+            delta_color = "off"
+            
+            if i == target_idx:
+                delta_color = "normal"
+            elif name == 'outcome':
+                delta_color = "inverse"
+            
+            cols[i].metric(
+                f"{name.capitalize()} (Orig)", 
+                f"{orig_vals[i]:.2f}", 
+                delta=f"{change:.2f}" if abs(change) > 1e-4 else "0.00",
+                delta_color=delta_color
+            )
+        
+        # ----------------------------------------------------
+        # ⭐ UPDATED PLOTTING LOGIC: Fix Color & Set Axis Limits
+        # ----------------------------------------------------
+        
+        # Calculate Global Min/Max for plotting limits from training data
+        data_min = data_tensor.min(dim=0).values.cpu().numpy()
+        data_max = data_tensor.max(dim=0).values.cpu().numpy()
+
+        # Create subplots dynamically
+        fig, axes = plt.subplots(1, dim, figsize=(dim * 4, 6))
+        
+        # Handle dim=1 case
+        if dim == 1:
+            axes = [axes]
+            
+        colors = ['skyblue', 'lightcoral'] 
+        labels = ['Original', 'Counterfactual']
+
+        for i, ax in enumerate(axes):
+            var_name = var_names[i]
+            
+            vals = [float(orig_vals[i]), float(cf_vals[i])]
+            
+            # Plot bars
+            bars = ax.bar(labels, vals)
+            
+            # Set colors manually
+            bars[0].set_color(colors[0])
+            bars[1].set_color(colors[1])
+            
+            # Formatting
+            ax.set_title(var_name.capitalize(), fontsize=14, fontweight='bold')
+            ax.set_ylabel("Value")
+            
+            # ⭐ SET Y-AXIS LIMITS TO DATA MIN/MAX
+            ax.set_ylim(data_min[i], data_max[i])
+
+            # Add value labels
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{height:.2f}',
+                        ha='center', va='bottom', fontsize=10)
+            
+            # Highlight Intervention Variable
+            if i == target_idx:
+                ax.set_title(f"{var_name.capitalize()} (Target)", color='blue', fontweight='bold')
+                for spine in ax.spines.values():
+                    spine.set_edgecolor('blue')
+                    spine.set_linewidth(2)
+
+            # Highlight Outcome Variable
+            if var_name == 'outcome':
+                ax.set_title(f"{var_name.capitalize()} (Predicted)", color='red', fontweight='bold')
+        
+        plt.tight_layout()
+        st.pyplot(fig)
+
+elif st.session_state.get('data_tensor') is None:
+    st.info("👈 Please define variables, enter the causal formula, and click 'Generate Data' first.")
