@@ -100,15 +100,15 @@ def generate_clinical_longitudinal(n=500):
     """Option 1-B: 8-Week Longitudinal Data"""
     np.random.seed(42)
 
-    # 1. 기본 정보 생성
+    # 1. Demographics
     ids = np.random.randint(10000000, 99999999, n)
     ages = np.random.randint(20, 80, n)
     sexes = np.random.randint(0, 2, n)  # 0: Female, 1: Male
-    doses = np.random.choice([0, 10, 20, 30, 40, 50], n) # 다양한 용량 그룹
+    doses = np.random.choice([0, 10, 20, 30, 40, 50], n) 
 
     weeks_data = []
 
-    # 2. 8주간의 변화 시뮬레이션
+    # 2. Simulation Loop
     for i in range(n):
         age = ages[i]
         dose = doses[i]
@@ -120,24 +120,19 @@ def generate_clinical_longitudinal(n=500):
         patient_trajectory = [round(w1)]
         current_val = w1
         
-        # 자연 악화율
         natural_worsening = 0.1 + (age / 100.0) * 0.05
-        
-        # 치료 효과
         treatment_effect = (dose / 50.0) * 0.6 
-        
-        # 주간 변화량
         delta = natural_worsening - treatment_effect
         
         for t in range(7): # Week 2 ~ 8
             noise = np.random.normal(0, 0.4)
             current_val += delta + noise
-            current_val = np.clip(current_val, 0, 10)
-            patient_trajectory.append(round(current_val))
+            # Allow some negative values if improvement is strong, just for plotting demo
+            # current_val = np.clip(current_val, 0, 10) 
+            patient_trajectory.append(round(current_val, 2))
             
         weeks_data.append(patient_trajectory)
 
-    # 3. 데이터프레임 만들기
     cols = ['Week1', 'Week2', 'Week3', 'Week4', 'Week5', 'Week6', 'Week7', 'Week8']
     df_weeks = pd.DataFrame(weeks_data, columns=cols)
     
@@ -192,8 +187,8 @@ if data_source == "Option 1: Synthetic Simulation":
 age = np.random.randint(40, 80, N)
 sex = np.random.binomial(1, 0.5, N).astype(float)
 dose = np.random.uniform(0, 100, N)
-outcome = (250 - 0.02 * dose ** 2 - 0.2 * age + 8.0 * sex + np.random.normal(0, 5.0, N))
-outcome = np.clip(outcome, 50, 300)
+# Allow outcome to be negative for visualization test
+outcome = (100 - 0.5 * dose - 0.2 * age + 10.0 * sex + np.random.normal(0, 5.0, N))
 """
         code_formula = st.sidebar.text_area("Code Formula", default_code_a, height=150)
         
@@ -201,7 +196,6 @@ outcome = np.clip(outcome, 50, 300)
             df = generate_synthetic_basic(N, var_input, code_formula)
             if df is not None:
                 st.sidebar.success(f"Generated {N} samples (Type A).")
-                # Auto config for Type A
                 st.session_state['col_config'] = {
                     'pre': ['age', 'sex'],
                     'int': ['dose'],
@@ -219,8 +213,6 @@ outcome = np.clip(outcome, 50, 300)
             df = generate_clinical_longitudinal(N_b)
             if df is not None:
                 st.sidebar.success(f"Generated {N_b} samples (Type B).")
-                # Auto config for Type B
-                # Note: Excluding 'Id' from training data
                 training_cols = [c for c in df.columns if c != 'Id']
                 
                 st.session_state['col_config'] = {
@@ -229,10 +221,8 @@ outcome = np.clip(outcome, 50, 300)
                     'out': [f'Week{i}' for i in range(1, 9)],
                     'all': training_cols
                 }
-                # Create tensor only with training columns
                 st.session_state['data_tensor'] = torch.FloatTensor(df[training_cols].values).to(device)
                 st.session_state['model'] = None
-                
                 st.dataframe(df.head(3))
 
 elif data_source == "Option 2: Clinical Data Upload":
@@ -244,8 +234,7 @@ elif data_source == "Option 2: Clinical Data Upload":
         if df is not None:
             st.sidebar.success("File loaded successfully.")
 
-# --- VARIABLE CONFIGURATION (For Option 2 or Manual Override) ---
-# We show this only if DF exists AND it's Option 2 (Option 1 is auto-configured)
+# --- VARIABLE CONFIGURATION ---
 if df is not None and data_source == "Option 2: Clinical Data Upload":
     st.divider()
     st.subheader("2. Variable Configuration")
@@ -261,7 +250,6 @@ if df is not None and data_source == "Option 2: Clinical Data Upload":
         out_cols = st.multiselect("3. Outcomes (Predicted)", all_cols, default=[])
 
     if st.button("Confirm Configuration"):
-        # Duplicate check
         all_selected = pre_cols + int_cols + out_cols
         if not all_selected:
              st.error("Please select columns.")
@@ -285,8 +273,8 @@ if df is not None and data_source == "Option 2: Clinical Data Upload":
 # --- TRAINING ---
 if st.session_state['data_tensor'] is not None:
     st.divider()
-    
     config = st.session_state.get('col_config', {})
+    
     if not config:
         st.warning("Variable configuration missing.")
     else:
@@ -304,7 +292,6 @@ if st.session_state['data_tensor'] is not None:
         if st.button("Train SoloCausal Model"):
             data_tensor = st.session_state['data_tensor']
             
-            # Complexity adjustment
             if N_samples < 1000:
                 n_layers, hidden_dim, wd = 2, 32, 1e-3
             else:
@@ -349,6 +336,7 @@ if st.session_state['model'] is not None:
     data = st.session_state['data_tensor']
     config = st.session_state['col_config']
     var_names = config['all']
+    dim = len(var_names)
     
     # 1. Select Patient
     max_id = data.shape[0] - 1
@@ -376,7 +364,6 @@ if st.session_state['model'] is not None:
             z = z_init.clone().detach().requires_grad_(True)
             opt = optim.Adam([z], lr=0.01)
             
-            # Indices Logic
             pre_indices = [var_names.index(c) for c in config['pre']]
             other_int_indices = [var_names.index(c) for c in config['int'] if c != intervention_var]
             fixed_indices = pre_indices + other_int_indices
@@ -402,58 +389,83 @@ if st.session_state['model'] is not None:
             
             bar.progress(1.0)
             
-            # Result
             with torch.no_grad():
                 x_cf = model.inverse(z)
                 cf_np = x_cf[0].cpu().numpy()
             
-            # Result Display
             st.write("### Result Comparison")
             
-            # Outcome Metrics
-            out_indices = [var_names.index(c) for c in config['out']]
-            cols = st.columns(len(out_indices))
-            for i, idx in enumerate(out_indices):
-                name = var_names[idx]
-                val_cf = cf_np[idx]
-                val_orig = orig_np[idx]
-                delta = val_cf - val_orig
-                with cols[i % len(cols)]: 
-                    st.metric(f"{name}", f"{val_cf:.2f}", f"{delta:+.2f}")
+            # --- Visualization with Grid Layout & Fixed Axes ---
             
-            # Visualization
-            dim = len(var_names)
-            fig, axes = plt.subplots(1, dim, figsize=(dim*3, 4))
-            if dim == 1: axes = [axes]
+            # 1. Calculate Global Data Min/Max for plotting limits
+            data_min = data.min(dim=0).values.cpu().numpy()
+            data_max = data.max(dim=0).values.cpu().numpy()
+            
+            # 2. Setup Grid Layout (Max 4 per row)
+            cols_per_row = 4
+            num_rows = (dim + cols_per_row - 1) // cols_per_row
+            
+            fig, axes = plt.subplots(num_rows, cols_per_row, figsize=(20, 5 * num_rows))
+            
+            # Flatten axes for easy iteration
+            if num_rows == 1 and cols_per_row == 1:
+                axes_flat = [axes]
+            elif num_rows == 1 or cols_per_row == 1:
+                axes_flat = axes
+            else:
+                axes_flat = axes.flatten()
             
             colors = ['skyblue', 'lightcoral']
             labels = ['Orig', 'CF']
-            
-            data_min = st.session_state['data_tensor'].min(dim=0).values.cpu().numpy()
-            data_max = st.session_state['data_tensor'].max(dim=0).values.cpu().numpy()
 
-            for i, ax in enumerate(axes):
-                vals = [orig_np[i], cf_np[i]]
-                bars = ax.bar(labels, vals)
-                bars[0].set_color(colors[0])
-                bars[1].set_color(colors[1])
+            out_indices = [var_names.index(c) for c in config['out']]
+
+            for i in range(len(axes_flat)):
+                ax = axes_flat[i]
                 
-                # Dynamic Y-Limits
-                margin = (data_max[i] - data_min[i]) * 0.1
-                if margin == 0: margin = 1.0
-                ax.set_ylim(data_min[i] - margin, data_max[i] + margin)
-                
-                ax.set_title(var_names[i])
-                
-                for bar in bars:
-                    h = bar.get_height()
-                    ax.text(bar.get_x() + bar.get_width()/2, h, f"{h:.2f}", ha='center', va='bottom', fontsize=9)
-                
-                if i == target_idx:
-                    ax.set_title(f"{var_names[i]} (Target)", color='blue', fontweight='bold')
-                    for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
-                elif i in out_indices:
-                    ax.set_title(f"{var_names[i]} (Outcome)", color='red', fontweight='bold')
+                if i < dim: # Valid subplot
+                    var_name = var_names[i]
+                    vals = [orig_np[i], cf_np[i]]
+                    
+                    # Bar Plot
+                    bars = ax.bar(labels, vals)
+                    bars[0].set_color(colors[0])
+                    bars[1].set_color(colors[1])
+                    
+                    # Add zero line for negative values
+                    ax.axhline(0, color='black', linewidth=0.8, alpha=0.5)
+                    
+                    # Set Robust Y-Limits (Training Data Min/Max + Margin)
+                    y_min_limit = data_min[i]
+                    y_max_limit = data_max[i]
+                    
+                    # Add 20% margin
+                    span = y_max_limit - y_min_limit
+                    if span == 0: span = 1.0
+                    margin = span * 0.2
+                    
+                    ax.set_ylim(y_min_limit - margin, y_max_limit + margin)
+                    
+                    ax.set_title(var_name, fontsize=12, fontweight='bold')
+                    
+                    # Annotations
+                    for bar in bars:
+                        h = bar.get_height()
+                        # Position text slightly above or below based on sign
+                        offset = margin * 0.05
+                        pos = h + offset if h >= 0 else h - offset * 3
+                        ax.text(bar.get_x() + bar.get_width()/2, pos, f"{h:.2f}", ha='center', va='bottom', fontsize=9)
+                    
+                    # Highlight Roles
+                    if i == target_idx:
+                        ax.set_title(f"{var_name} (Target)", color='blue', fontweight='bold')
+                        for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
+                    elif i in out_indices:
+                        ax.set_title(f"{var_name} (Outcome)", color='red', fontweight='bold')
+                        
+                else:
+                    # Hide unused subplots
+                    ax.axis('off')
 
             plt.tight_layout()
             st.pyplot(fig)
