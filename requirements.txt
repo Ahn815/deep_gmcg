@@ -2,4 +2,5 @@ streamlit
 torch
 numpy
 matplotlib
+pandas
 openpyxl
