@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -6,15 +7,15 @@ import torch.distributions as D
 from torch.utils.data import DataLoader, TensorDataset, random_split
 import numpy as np
 import matplotlib.pyplot as plt
+import io
 
 # Page Configuration
-st.set_page_config(page_title="Dynamic RealNVP Causal Inference Simulator", layout="wide")
+st.set_page_config(page_title="Deep GMCG: Clinical Causal Inference", layout="wide")
 
 # Device Configuration
 device = torch.device("cpu")
 
 # --- 1. RealNVP Model Class Definition ---
-
 class RealNVP(nn.Module):
     def __init__(self, dim=4, n_layers=4, hidden_dim=128):
         super().__init__()
@@ -27,6 +28,7 @@ class RealNVP(nn.Module):
         masks = [mask] + [1 - mask] * (n_layers - 1)
         self.masks = torch.stack(masks[:n_layers])
 
+        # Dynamic Network Builder
         def net():
             return nn.Sequential(
                 nn.Linear(dim, hidden_dim), nn.LeakyReLU(0.2),
@@ -63,121 +65,175 @@ class RealNVP(nn.Module):
         log_pz = self.prior.log_prob(z)
         return log_pz + log_det
 
-# --- 2. Dynamic Data Generation Function ---
+# --- 2. Data Helper Functions ---
 
-def generate_dynamic_data(n_samples, var_names, code_formula):
-    # Prepare environment for code execution
+def load_synthetic_data(n_samples, var_names, code_formula):
+    """Option 1: Generate Synthetic Data"""
     local_vars = {'N': n_samples, 'np': np, 'D': D.MultivariateNormal, 'torch': torch}
-    
     try:
-        # Execute user-provided code
-        # WARNING: This uses exec() and can run arbitrary code. Use with caution.
         exec(code_formula, globals(), local_vars)
-        
-        # Retrieve generated variables in order
         feature_names = [name.strip() for name in var_names.split(',')]
         
         if 'outcome' not in local_vars:
-             st.error("Error: The code must define an 'outcome' variable.")
-             return None, 0
-
-        # Collect all generated features and the outcome
+             st.error("Error: Code must define 'outcome'.")
+             return None, None
+        
         all_vars = []
         for name in feature_names:
-            if name in local_vars:
-                all_vars.append(local_vars[name])
-            else:
-                st.error(f"Error: Feature variable '{name}' not found after executing the code.")
-                return None, 0
-
+            if name not in local_vars:
+                st.error(f"Error: Variable '{name}' not found.")
+                return None, None
+            all_vars.append(local_vars[name])
         all_vars.append(local_vars['outcome'])
         
-        # Final Tensor Creation
         data = np.column_stack(all_vars)
-        data_tensor = torch.FloatTensor(data).to(device)
-        
-        # Calculate Dimension
-        dim = data.shape[1] 
-
-        # Store variable names and indices for CF inference
-        st.session_state['var_names'] = feature_names + ['outcome']
-        st.session_state['data_col_indices'] = {name: i for i, name in enumerate(st.session_state['var_names'])}
-        
-        return data_tensor, dim
-
+        final_var_names = feature_names + ['outcome']
+        return data, final_var_names
     except Exception as e:
-        st.error(f"Data Generation Error: {e}")
-        return None, 0
+        st.error(f"Generation Error: {e}")
+        return None, None
+
+def load_clinical_data(uploaded_file):
+    """Option 2: Load Clinical Trial Data"""
+    try:
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
+        
+        # Simple preprocessing: Drop NaNs
+        df = df.dropna()
+        
+        # Only keep numeric columns
+        numeric_df = df.select_dtypes(include=[np.number])
+        
+        if numeric_df.empty:
+            st.error("Error: No numeric columns found in the uploaded file.")
+            return None
+            
+        return numeric_df
+    except Exception as e:
+        st.error(f"File Loading Error: {e}")
+        return None
 
 # --- 3. Streamlit UI Start ---
 
-st.title("💊 Dynamic RealNVP Causal Inference Simulator")
-st.markdown("""
-This app allows you to **dynamically define the variables and causal formula** for the simulation.
-""")
+st.title("🏥 Deep GMCG: Clinical Trial Counterfactuals")
+st.markdown("Generative Model for Causal counterfactual Generation (GMCG) using RealNVP.")
 
 # Initialize Session State
-if 'model' not in st.session_state:
-    st.session_state['model'] = None
-if 'data_tensor' not in st.session_state:
-    st.session_state['data_tensor'] = None
+if 'model' not in st.session_state: st.session_state['model'] = None
+if 'data_tensor' not in st.session_state: st.session_state['data_tensor'] = None
+if 'var_names' not in st.session_state: st.session_state['var_names'] = []
 
-# --- Sidebar Configuration ---
-st.sidebar.header("1. Data & Model Setup")
-N = st.sidebar.slider("Number of Samples (N)", 1000, 20000, 5000, step=1000)
-epochs = st.sidebar.number_input("Training Epochs", value=100, min_value=10)
-lr = st.sidebar.number_input("Learning Rate", value=1e-4, format="%.5f")
+# --- SIDEBAR: DATA SOURCE SELECTION ---
+st.sidebar.header("1. Data Source Configuration")
+data_option = st.sidebar.radio(
+    "Select Data Mode:",
+    ("Option 1: Synthetic Simulation", "Option 2: Clinical Data Upload")
+)
 
-st.sidebar.markdown("### Dynamic Variable Definition")
-var_input = st.sidebar.text_input("Feature Variables (comma-separated)", "age, sex, dose")
+# Global variables for data
+data_array = None
+var_names = []
 
-default_code = """
-# Define independent variables here (must use NumPy and N)
+if data_option == "Option 1: Synthetic Simulation":
+    st.sidebar.subheader("Synthetic Data Settings")
+    N = st.sidebar.slider("Sample Size (N)", 500, 10000, 5000)
+    var_input = st.sidebar.text_input("Features (comma-separated)", "age, sex, dose")
+    
+    default_code = """
 age = np.random.randint(40, 80, N)
 sex = np.random.binomial(1, 0.5, N).astype(float)
-dose = np.random.uniform(0, 100, N)
-
-# Define Outcome (must be named 'outcome')
-outcome = (250 - 0.02 * dose ** 2 - 0.2 * age + 8.0 * sex + np.random.normal(0, 0.1, N))
+dose = np.random.uniform(0, 100, N) # e.g., Total accumulated dose over 8 weeks
+outcome = (250 - 0.02 * dose ** 2 - 0.2 * age + 8.0 * sex + np.random.normal(0, 5.0, N))
 outcome = np.clip(outcome, 50, 300)
 """
-code_formula = st.sidebar.text_area("Causal Formula Code (NumPy)", default_code, height=300)
-st.sidebar.warning("Security Note: Code executed via 'exec' can be unsafe.")
-
-# Data Generation Button
-if st.sidebar.button("Generate Data & Initialize Model"):
-    data_tensor, dim = generate_dynamic_data(N, var_input, code_formula)
+    code_formula = st.sidebar.text_area("Generation Code (NumPy)", default_code, height=200)
     
-    if data_tensor is not None:
-        st.session_state['data_tensor'] = data_tensor
-        st.session_state['dim'] = dim # Store DIM
-        st.session_state['model'] = None
-        st.sidebar.success(f"{N} data samples created. Dimension (D): {dim}")
+    if st.sidebar.button("Generate Synthetic Data"):
+        data_array, var_names = load_synthetic_data(N, var_input, code_formula)
+        if data_array is not None:
+            st.session_state['data_tensor'] = torch.FloatTensor(data_array).to(device)
+            st.session_state['var_names'] = var_names
+            st.session_state['model'] = None # Reset model
+            st.success(f"Generated {N} samples with {len(var_names)} variables.")
+
+elif data_option == "Option 2: Clinical Data Upload":
+    st.sidebar.subheader("Clinical File Upload")
+    uploaded_file = st.sidebar.file_uploader("Upload CSV or Excel", type=['csv', 'xlsx'])
+    
+    if uploaded_file:
+        df = load_clinical_data(uploaded_file)
+        if df is not None:
+            st.sidebar.write("### Column Selection")
+            all_cols = df.columns.tolist()
+            
+            # User defines Features and Outcome
+            feature_cols = st.sidebar.multiselect("Select Feature Columns (X)", all_cols, default=all_cols[:-1])
+            outcome_col = st.sidebar.selectbox("Select Outcome Column (Y)", all_cols, index=len(all_cols)-1)
+            
+            if st.sidebar.button("Load Clinical Data"):
+                if not feature_cols:
+                    st.sidebar.error("Please select at least one feature.")
+                else:
+                    # Prepare Data: [Features, Outcome]
+                    selected_cols = feature_cols + [outcome_col]
+                    final_data = df[selected_cols].values
+                    
+                    st.session_state['data_tensor'] = torch.FloatTensor(final_data).to(device)
+                    st.session_state['var_names'] = selected_cols
+                    st.session_state['model'] = None # Reset model
+                    st.success(f"Loaded {len(final_data)} patients. Dim: {len(selected_cols)}")
+                    st.dataframe(df[selected_cols].head(3))
+
+# --- MAIN AREA: MODEL TRAINING ---
+
+if st.session_state['data_tensor'] is not None:
+    data_tensor = st.session_state['data_tensor']
+    var_names = st.session_state['var_names']
+    dim = data_tensor.shape[1]
+    N_samples = data_tensor.shape[0]
+    
+    st.divider()
+    st.subheader(f"2. Model Training (N={N_samples}, Dim={dim})")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        epochs = st.number_input("Epochs", 10, 2000, 300)
+    with col2:
+        lr = st.number_input("Learning Rate", 1e-5, 1e-2, 1e-3, format="%.5f")
+    with col3:
+        # Small Data Handling
+        complexity = st.selectbox("Model Complexity", ["High (Standard)", "Low (For Small Data)"])
+        
+    if complexity == "High (Standard)":
+        n_layers, hidden_dim, weight_decay = 4, 64, 0.0
     else:
-        st.sidebar.error("Data generation failed. Check your code.")
+        # Prevent overfitting for small clinical datasets
+        n_layers, hidden_dim, weight_decay = 2, 32, 1e-4
 
-# --- Main Area ---
-
-# 2. Model Training (Uses dynamic DIM)
-if st.session_state.get('data_tensor') is not None:
-    dim = st.session_state['dim']
-    st.subheader(f"2. Model Training (Dimension: D={dim})")
-    
-    if st.button("Start Model Training"):
+    if st.button("Start Training"):
+        # Setup Data
+        train_size = int(0.8 * N_samples)
+        # Ensure train_size > 0
+        if train_size < 1: train_size = 1
         
-        # Data loading setup
-        train_size = int(0.8 * N)
-        train_data, val_data = random_split(st.session_state['data_tensor'], [train_size, N - train_size])
-        train_loader = DataLoader(train_data, batch_size=256, shuffle=True)
+        train_data, val_data = random_split(data_tensor, [train_size, N_samples - train_size])
         
-        # Model initialization uses dynamic DIM
-        model = RealNVP(dim=dim, n_layers=4, hidden_dim=12).to(device)
-        optimizer = optim.Adam(model.parameters(), lr=lr)
-
+        # Adjust batch size for small data
+        batch_size = min(64, train_size)
+        train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+        
+        # Init Model
+        model = RealNVP(dim=dim, n_layers=n_layers, hidden_dim=hidden_dim).to(device)
+        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay) # Added L2 Reg
+        
+        # Training Loop
         progress_bar = st.progress(0)
-        status_text = st.empty()
-        loss_history = []
-
+        status = st.empty()
+        loss_hist = []
+        
         model.train()
         for epoch in range(1, epochs + 1):
             epoch_loss = 0.0
@@ -190,199 +246,152 @@ if st.session_state.get('data_tensor') is not None:
                 epoch_loss += loss.item() * batch.size(0)
             
             epoch_loss /= len(train_loader.dataset)
-            loss_history.append(epoch_loss)
+            loss_hist.append(epoch_loss)
             
-            if epoch % 10 == 0 or epoch == 1:
+            if epoch % 10 == 0:
                 progress_bar.progress(epoch / epochs)
-                status_text.text(f"Epoch {epoch}/{epochs} | Loss: {epoch_loss:.4f}")
-                
-        st.session_state['model'] = model 
-        st.success("Training Complete!")
+                status.text(f"Epoch {epoch}/{epochs} | Loss: {epoch_loss:.4f}")
         
-        # Plot Loss Curve
-        fig_loss, ax_loss = plt.subplots(figsize=(10, 3))
-        ax_loss.plot(loss_history, label='Train Loss')
-        ax_loss.set_xlabel('Epoch')
-        ax_loss.set_ylabel('Negative Log Likelihood')
-        ax_loss.legend()
-        st.pyplot(fig_loss)
+        progress_bar.progress(1.0)
+        st.session_state['model'] = model
+        st.success("Training Complete")
+        
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.plot(loss_hist)
+        ax.set_title("Training Loss (Negative Log Likelihood)")
+        st.pyplot(fig)
 
-# 3. Counterfactual Inference (Uses dynamic variable names and indices)
-if st.session_state.get('model') is not None:
+# --- MAIN AREA: COUNTERFACTUAL INFERENCE ---
+
+if st.session_state['model'] is not None:
     st.divider()
-    st.subheader("3. Counterfactual Inference")
-    st.markdown("Simulate **'What would have happened if the value of one variable was changed?'**")
-
-    # --- Optimization Steps Input ---
-    steps = st.number_input(
-        "Optimization Steps (Higher = More Accurate, Slower)", 
-        min_value=100, 
-        max_value=20000, 
-        value=7000, 
-        step=100
-    )
-    # ------------------------------------
-
+    st.subheader("3. Clinical Counterfactual Inference / ITE Estimation")
+    
     var_names = st.session_state['var_names']
-    dim = st.session_state['dim']
+    data_tensor = st.session_state['data_tensor']
+    model = st.session_state['model']
+    dim = len(var_names)
     
-    # Feature names (all except the last one, which is 'outcome')
-    feature_names = var_names[:-1] 
+    # Identify indices
+    feature_names = var_names[:-1] # All except last
+    outcome_name = var_names[-1]   # Last one
     
-    # Dynamic selection of the intervention variable
-    intervention_var_name = st.selectbox(
-        "Select Intervention Variable (Which variable to change?)",
-        options=feature_names,
-        index=feature_names.index('dose') if 'dose' in feature_names else 0
-    )
+    # Calculate Data Range for Plotting
+    data_min = data_tensor.min(dim=0).values.cpu().numpy()
+    data_max = data_tensor.max(dim=0).values.cpu().numpy()
     
-    # Get the index of the variable to intervene on
-    target_idx = st.session_state['data_col_indices'][intervention_var_name]
-
+    # --- Input Settings ---
     col1, col2 = st.columns(2)
     with col1:
-        patient_idx = st.number_input("Select Patient ID (0 ~ N-1)", 0, N-1, 100)
+        # Patient Selection
+        max_id = data_tensor.shape[0] - 1
+        patient_idx = st.number_input(f"Select Patient ID (0~{max_id})", 0, max_id, 0)
     with col2:
-        # Simple max range for input
-        target_val_input = st.number_input(f"Target Value for '{intervention_var_name}'", 0.0, 100.0, 90.0)
+        steps = st.number_input("Optimization Steps", 100, 10000, 2000, 100)
+    
+    # Intervention Selection
+    intervention_var = st.selectbox("Intervention Variable (e.g., Dose)", feature_names)
+    target_idx = var_names.index(intervention_var)
+    outcome_idx = len(var_names) - 1
+    
+    # Target Value Input
+    # Default to current value to avoid confusion
+    current_val = float(data_tensor[patient_idx, target_idx])
+    target_val = st.number_input(
+        f"Set Counterfactual Value for '{intervention_var}' (Current: {current_val:.2f})", 
+        value=current_val
+    )
 
-    if st.button("Generate Counterfactual Result"):
-        model = st.session_state['model']
-        data_tensor = st.session_state['data_tensor']
-        
+    if st.button("Generate Counterfactual Outcome"):
         x_orig = data_tensor[patient_idx:patient_idx+1].to(device)
         orig_vals = x_orig[0].cpu().numpy()
         
-        # Find Latent z
+        # 1. Latent Search
         model.eval()
         with torch.no_grad():
             z_init, _ = model.forward(x_orig)
         
         z = z_init.clone().detach().requires_grad_(True)
-        opt_cf = optim.Adam([z], lr=2e-3)
-
-        cf_progress = st.progress(0)
+        opt_cf = optim.Adam([z], lr=0.01) # Slightly higher LR for faster convergence
         
-        # Determine the outcome index (always the last one)
-        outcome_idx = dim - 1
-        
-        # FIXED INDICES: All indices EXCEPT the intervention variable AND the outcome variable
+        # Indices to fix (All except Target and Outcome)
         fixed_indices = [i for i in range(dim) if i != target_idx and i != outcome_idx]
         
-        # Counterfactual Optimization Loop
+        # Optimization
+        cf_bar = st.progress(0)
         for step in range(steps):
             opt_cf.zero_grad()
             x_pred = model.inverse(z)
             
-            # 1. Loss for FIXED variables
-            loss_fixed_components = []
+            # Loss Components
+            loss_fixed = 0
             if fixed_indices:
-                for i in fixed_indices:
-                    loss_fixed_components.append((x_pred[:, i] - x_orig[:, i]) ** 2)
-                
-                loss_fixed = torch.stack(loss_fixed_components, dim=1).sum(dim=1) * 1e2 
-            else: 
-                loss_fixed = 0
+                # Weighted sum of squares for fixed variables
+                diff = x_pred[:, fixed_indices] - x_orig[:, fixed_indices]
+                loss_fixed = (diff ** 2).sum() * 1e3 
             
-            # 2. Loss for TARGET variable
-            loss_target = (x_pred[:, target_idx] - target_val_input) ** 2
+            loss_target = ((x_pred[:, target_idx] - target_val) ** 2) * 1e3
+            loss_reg = 0.5 * (z ** 2).sum() # L2 regularization on z
             
-            # 3. Regularization Loss
-            loss_reg = 0.5 * z.square().sum()
-            
-            # Total Loss
-            loss = 1e5 * (loss_fixed + loss_target) + loss_reg
-            
+            loss = loss_fixed + loss_target + loss_reg
             loss.backward()
             opt_cf.step()
             
-            if step % 100 == 0:
-                cf_progress.progress((step + 1) / steps)
+            if step % 200 == 0: cf_bar.progress((step+1)/steps)
         
-        cf_progress.progress(1.0)
+        cf_bar.progress(1.0)
         
-        # Final Results
+        # Result
         with torch.no_grad():
             x_cf = model.inverse(z)
             cf_vals = x_cf[0].cpu().numpy()
-            
-        st.write("### Result Comparison")
         
-        # Dynamic Metric Display
-        cols = st.columns(dim)
-        for i, name in enumerate(var_names):
-            change = cf_vals[i] - orig_vals[i]
-            delta_color = "off"
-            
-            if i == target_idx:
-                delta_color = "normal"
-            elif name == 'outcome':
-                delta_color = "inverse"
-            
-            cols[i].metric(
-                f"{name.capitalize()} (Orig)", 
-                f"{orig_vals[i]:.2f}", 
-                delta=f"{change:.2f}" if abs(change) > 1e-4 else "0.00",
-                delta_color=delta_color
-            )
+        # ITE Calculation (Predicted Outcome - Factual Outcome)
+        factual_y = orig_vals[outcome_idx]
+        cf_y = cf_vals[outcome_idx]
+        ite = cf_y - factual_y
         
-        # ----------------------------------------------------
-        # ⭐ UPDATED PLOTTING LOGIC: Fix Color & Set Axis Limits
-        # ----------------------------------------------------
+        st.write("### Inference Results")
         
-        # Calculate Global Min/Max for plotting limits from training data
-        data_min = data_tensor.min(dim=0).values.cpu().numpy()
-        data_max = data_tensor.max(dim=0).values.cpu().numpy()
-
-        # Create subplots dynamically
-        fig, axes = plt.subplots(1, dim, figsize=(dim * 4, 6))
+        # Metrics
+        m1, m2, m3 = st.columns(3)
+        m1.metric(f"Factual {outcome_name}", f"{factual_y:.2f}")
+        m2.metric(f"Counterfactual {outcome_name}", f"{cf_y:.2f}")
+        m3.metric("Estimated ITE", f"{ite:.2f}", delta_color="normal")
         
-        # Handle dim=1 case
-        if dim == 1:
-            axes = [axes]
-            
-        colors = ['skyblue', 'lightcoral'] 
-        labels = ['Original', 'Counterfactual']
-
+        # Plotting
+        fig, axes = plt.subplots(1, dim, figsize=(dim*3, 4))
+        if dim == 1: axes = [axes]
+        
+        colors = ['skyblue', 'lightcoral']
+        labels = ['Factual', 'CF']
+        
         for i, ax in enumerate(axes):
-            var_name = var_names[i]
-            
-            vals = [float(orig_vals[i]), float(cf_vals[i])]
-            
-            # Plot bars
+            vals = [orig_vals[i], cf_vals[i]]
             bars = ax.bar(labels, vals)
-            
-            # Set colors manually
             bars[0].set_color(colors[0])
             bars[1].set_color(colors[1])
             
-            # Formatting
-            ax.set_title(var_name.capitalize(), fontsize=14, fontweight='bold')
-            ax.set_ylabel("Value")
+            # Set limits based on global data min/max (with some margin)
+            margin = (data_max[i] - data_min[i]) * 0.1
+            ax.set_ylim(data_min[i] - margin, data_max[i] + margin)
             
-            # ⭐ SET Y-AXIS LIMITS TO DATA MIN/MAX
-            ax.set_ylim(data_min[i], data_max[i])
-
-            # Add value labels
+            ax.set_title(var_names[i])
+            
+            # Annotate
             for bar in bars:
-                height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width()/2., height,
-                        f'{height:.2f}',
-                        ha='center', va='bottom', fontsize=10)
+                h = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2, h, f"{h:.2f}", ha='center', va='bottom')
             
-            # Highlight Intervention Variable
+            # Highlight
             if i == target_idx:
-                ax.set_title(f"{var_name.capitalize()} (Target)", color='blue', fontweight='bold')
-                for spine in ax.spines.values():
-                    spine.set_edgecolor('blue')
-                    spine.set_linewidth(2)
-
-            # Highlight Outcome Variable
-            if var_name == 'outcome':
-                ax.set_title(f"{var_name.capitalize()} (Predicted)", color='red', fontweight='bold')
-        
+                ax.set_title(f"{var_names[i]} (Intervention)", color='blue', fontweight='bold')
+                for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
+            elif i == outcome_idx:
+                ax.set_title(f"{var_names[i]} (Outcome)", color='red', fontweight='bold')
+                
         plt.tight_layout()
         st.pyplot(fig)
 
-elif st.session_state.get('data_tensor') is None:
-    st.info("👈 Please define variables, enter the causal formula, and click 'Generate Data' first.")
+elif st.session_state['data_tensor'] is None:
+    st.info("👈 Please select a Data Option in the Sidebar and load data.")
