@@ -69,8 +69,8 @@ class RealNVP(nn.Module):
 
 # --- 2. Data Helper Functions ---
 
-def load_synthetic_data_original(n_samples, var_names, code_formula):
-    """Restored Original Option 1 Logic"""
+def generate_synthetic_basic(n_samples, var_names, code_formula):
+    """Option 1-A: Basic Cross-sectional Data"""
     local_vars = {'N': n_samples, 'np': np, 'D': D.MultivariateNormal, 'torch': torch}
     try:
         exec(code_formula, globals(), local_vars)
@@ -78,28 +78,81 @@ def load_synthetic_data_original(n_samples, var_names, code_formula):
         
         if 'outcome' not in local_vars:
              st.error("Error: Code must define 'outcome'.")
-             return None, None
+             return None
         
         all_vars = []
         for name in feature_names:
             if name not in local_vars:
                 st.error(f"Error: Variable '{name}' not found.")
-                return None, None
+                return None
             all_vars.append(local_vars[name])
         all_vars.append(local_vars['outcome'])
         
         data = np.column_stack(all_vars)
         final_var_names = feature_names + ['outcome']
         
-        # Create a DataFrame for easier handling
-        df = pd.DataFrame(data, columns=final_var_names)
-        return df
+        return pd.DataFrame(data, columns=final_var_names)
     except Exception as e:
         st.error(f"Generation Error: {e}")
         return None
 
+def generate_clinical_longitudinal(n=500):
+    """Option 1-B: 8-Week Longitudinal Data"""
+    np.random.seed(42)
+
+    # 1. 기본 정보 생성
+    ids = np.random.randint(10000000, 99999999, n)
+    ages = np.random.randint(20, 80, n)
+    sexes = np.random.randint(0, 2, n)  # 0: Female, 1: Male
+    doses = np.random.choice([0, 10, 20, 30, 40, 50], n) # 다양한 용량 그룹
+
+    weeks_data = []
+
+    # 2. 8주간의 변화 시뮬레이션
+    for i in range(n):
+        age = ages[i]
+        dose = doses[i]
+        
+        # Week 1 (Baseline)
+        w1 = 5.0 + (age - 40) * 0.05 + np.random.normal(0, 1.0)
+        w1 = np.clip(w1, 2, 9)
+        
+        patient_trajectory = [round(w1)]
+        current_val = w1
+        
+        # 자연 악화율
+        natural_worsening = 0.1 + (age / 100.0) * 0.05
+        
+        # 치료 효과
+        treatment_effect = (dose / 50.0) * 0.6 
+        
+        # 주간 변화량
+        delta = natural_worsening - treatment_effect
+        
+        for t in range(7): # Week 2 ~ 8
+            noise = np.random.normal(0, 0.4)
+            current_val += delta + noise
+            current_val = np.clip(current_val, 0, 10)
+            patient_trajectory.append(round(current_val))
+            
+        weeks_data.append(patient_trajectory)
+
+    # 3. 데이터프레임 만들기
+    cols = ['Week1', 'Week2', 'Week3', 'Week4', 'Week5', 'Week6', 'Week7', 'Week8']
+    df_weeks = pd.DataFrame(weeks_data, columns=cols)
+    
+    df_final = pd.DataFrame({
+        'Id': ids,
+        'Age': ages,
+        'Sex': sexes,
+        'Dose': doses
+    })
+    
+    df_final = pd.concat([df_final, df_weeks], axis=1)
+    return df_final
+
 def load_clinical_data(uploaded_file):
-    """Option 2: Generic Loader"""
+    """Option 2: File Upload"""
     try:
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file)
@@ -123,47 +176,66 @@ if 'col_config' not in st.session_state: st.session_state['col_config'] = {}
 
 # --- SIDEBAR: DATA SOURCE ---
 st.sidebar.header("1. Data Source")
-data_option = st.sidebar.radio("Select Mode:", ("Option 1: Synthetic Simulation", "Option 2: Clinical Data Upload"))
+data_source = st.sidebar.radio("Main Source:", ("Option 1: Synthetic Simulation", "Option 2: Clinical Data Upload"))
 
 df = None
+sim_type = None
 
-if data_option == "Option 1: Synthetic Simulation":
-    st.sidebar.subheader("Synthetic Generator (Original)")
-    N = st.sidebar.slider("Sample Size (N)", 500, 10000, 5000)
-    var_input = st.sidebar.text_input("Features (comma-separated)", "age, sex, dose")
+if data_source == "Option 1: Synthetic Simulation":
+    sim_type = st.sidebar.radio("Simulation Type:", ("Type A: Basic (Cross-sectional)", "Type B: Longitudinal (8-Week Trial)"))
     
-    default_code = """
-# Define independent variables (NumPy)
+    if sim_type == "Type A: Basic (Cross-sectional)":
+        st.sidebar.markdown("**Type A: Age, Sex, Dose -> Outcome**")
+        N = st.sidebar.slider("Sample Size (N)", 500, 10000, 5000)
+        var_input = st.sidebar.text_input("Features", "age, sex, dose")
+        default_code_a = """
 age = np.random.randint(40, 80, N)
 sex = np.random.binomial(1, 0.5, N).astype(float)
 dose = np.random.uniform(0, 100, N)
-
-# Define Outcome (must be named 'outcome')
-# Causal relationship with some noise
 outcome = (250 - 0.02 * dose ** 2 - 0.2 * age + 8.0 * sex + np.random.normal(0, 5.0, N))
 outcome = np.clip(outcome, 50, 300)
 """
-    code_formula = st.sidebar.text_area("Generation Code", default_code, height=200)
-    
-    if st.sidebar.button("Generate Synthetic Data"):
-        df = load_synthetic_data_original(N, var_input, code_formula)
-        if df is not None:
-            st.sidebar.success(f"Generated {N} samples.")
-            # Auto-configure for Option 1
-            all_cols = df.columns.tolist()
-            # Assuming last is outcome, first few are pre-treatment, 'dose' is intervention
-            # Simple heuristic for default Option 1
-            st.session_state['col_config'] = {
-                'pre': ['age', 'sex'],
-                'int': ['dose'],
-                'out': ['outcome'],
-                'all': all_cols
-            }
-            # Save Tensor
-            st.session_state['data_tensor'] = torch.FloatTensor(df.values).to(device)
-            st.session_state['model'] = None
+        code_formula = st.sidebar.text_area("Code Formula", default_code_a, height=150)
+        
+        if st.sidebar.button("Generate Type A Data"):
+            df = generate_synthetic_basic(N, var_input, code_formula)
+            if df is not None:
+                st.sidebar.success(f"Generated {N} samples (Type A).")
+                # Auto config for Type A
+                st.session_state['col_config'] = {
+                    'pre': ['age', 'sex'],
+                    'int': ['dose'],
+                    'out': ['outcome'],
+                    'all': df.columns.tolist()
+                }
+                st.session_state['data_tensor'] = torch.FloatTensor(df.values).to(device)
+                st.session_state['model'] = None
 
-elif data_option == "Option 2: Clinical Data Upload":
+    elif sim_type == "Type B: Longitudinal (8-Week Trial)":
+        st.sidebar.markdown("**Type B: Age, Sex, Dose -> Week1...Week8**")
+        N_b = st.sidebar.slider("Sample Size (N)", 500, 10000, 500)
+        
+        if st.sidebar.button("Generate Type B Data"):
+            df = generate_clinical_longitudinal(N_b)
+            if df is not None:
+                st.sidebar.success(f"Generated {N_b} samples (Type B).")
+                # Auto config for Type B
+                # Note: Excluding 'Id' from training data
+                training_cols = [c for c in df.columns if c != 'Id']
+                
+                st.session_state['col_config'] = {
+                    'pre': ['Age', 'Sex'],
+                    'int': ['Dose'],
+                    'out': [f'Week{i}' for i in range(1, 9)],
+                    'all': training_cols
+                }
+                # Create tensor only with training columns
+                st.session_state['data_tensor'] = torch.FloatTensor(df[training_cols].values).to(device)
+                st.session_state['model'] = None
+                
+                st.dataframe(df.head(3))
+
+elif data_source == "Option 2: Clinical Data Upload":
     st.sidebar.subheader("Clinical Data Loader")
     uploaded_file = st.sidebar.file_uploader("Upload CSV/Excel", type=['csv', 'xlsx'])
     
@@ -172,12 +244,11 @@ elif data_option == "Option 2: Clinical Data Upload":
         if df is not None:
             st.sidebar.success("File loaded successfully.")
 
-# --- VARIABLE CONFIGURATION (Unified Logic) ---
-# Only show manual config for Option 2, or if Option 1 needs tweaking
-if df is not None and data_option == "Option 2: Clinical Data Upload":
+# --- VARIABLE CONFIGURATION (For Option 2 or Manual Override) ---
+# We show this only if DF exists AND it's Option 2 (Option 1 is auto-configured)
+if df is not None and data_source == "Option 2: Clinical Data Upload":
     st.divider()
     st.subheader("2. Variable Configuration")
-    st.info("Define the causal role of each column.")
     
     all_cols = df.columns.tolist()
     c1, c2, c3 = st.columns(3)
@@ -190,10 +261,13 @@ if df is not None and data_option == "Option 2: Clinical Data Upload":
         out_cols = st.multiselect("3. Outcomes (Predicted)", all_cols, default=[])
 
     if st.button("Confirm Configuration"):
-        if not pre_cols or not int_cols or not out_cols:
-            st.error("Please assign columns to all categories.")
+        # Duplicate check
+        all_selected = pre_cols + int_cols + out_cols
+        if not all_selected:
+             st.error("Please select columns.")
+        elif len(all_selected) != len(set(all_selected)):
+            st.error("🚨 Duplicate columns detected!")
         else:
-            # Reorder for safety: Pre -> Int -> Out
             ordered_cols = pre_cols + int_cols + out_cols
             ordered_data = df[ordered_cols].values
             
@@ -212,10 +286,9 @@ if df is not None and data_option == "Option 2: Clinical Data Upload":
 if st.session_state['data_tensor'] is not None:
     st.divider()
     
-    # Get Config
     config = st.session_state.get('col_config', {})
     if not config:
-        st.warning("Please configure variables first.")
+        st.warning("Variable configuration missing.")
     else:
         dim = len(config['all'])
         N_samples = st.session_state['data_tensor'].shape[0]
@@ -231,7 +304,7 @@ if st.session_state['data_tensor'] is not None:
         if st.button("Train SoloCausal Model"):
             data_tensor = st.session_state['data_tensor']
             
-            # Smart complexity adjustment
+            # Complexity adjustment
             if N_samples < 1000:
                 n_layers, hidden_dim, wd = 2, 32, 1e-3
             else:
@@ -285,16 +358,13 @@ if st.session_state['model'] is not None:
     orig_np = x_orig[0].cpu().numpy()
     
     # 2. Define Intervention
-    # Only allow selecting variables defined as 'Interventions' in config
     intervention_candidates = config['int']
     if not intervention_candidates:
-        st.error("No Intervention variables defined in configuration.")
+        st.error("No Intervention variables defined.")
     else:
         intervention_var = st.selectbox("Select Variable to Change", intervention_candidates)
         
-        # Find index in the full tensor
         target_idx = var_names.index(intervention_var)
-        
         current_val = float(orig_np[target_idx])
         target_val = st.number_input(f"Target Value for '{intervention_var}' (Current: {current_val:.2f})", value=current_val)
         
@@ -307,16 +377,8 @@ if st.session_state['model'] is not None:
             opt = optim.Adam([z], lr=0.01)
             
             # Indices Logic
-            # Fix Pre-treatment variables AND other Interventions (that we are not changing)
-            # Outcomes are free to change
-            
-            # Indices of Pre-treatment variables
             pre_indices = [var_names.index(c) for c in config['pre']]
-            
-            # Indices of Intervention variables EXCEPT the target one
             other_int_indices = [var_names.index(c) for c in config['int'] if c != intervention_var]
-            
-            # Combine fixed indices
             fixed_indices = pre_indices + other_int_indices
             
             bar = st.progress(0)
@@ -345,23 +407,21 @@ if st.session_state['model'] is not None:
                 x_cf = model.inverse(z)
                 cf_np = x_cf[0].cpu().numpy()
             
-            # Visualization
+            # Result Display
             st.write("### Result Comparison")
             
-            # Identify Outcome indices for specific metrics
+            # Outcome Metrics
             out_indices = [var_names.index(c) for c in config['out']]
-            
-            # Metrics for Outcomes
             cols = st.columns(len(out_indices))
             for i, idx in enumerate(out_indices):
                 name = var_names[idx]
-                val_orig = orig_np[idx]
                 val_cf = cf_np[idx]
+                val_orig = orig_np[idx]
                 delta = val_cf - val_orig
-                with cols[i % len(cols)]: # Wrap if many columns
+                with cols[i % len(cols)]: 
                     st.metric(f"{name}", f"{val_cf:.2f}", f"{delta:+.2f}")
             
-            # Bar Chart
+            # Visualization
             dim = len(var_names)
             fig, axes = plt.subplots(1, dim, figsize=(dim*3, 4))
             if dim == 1: axes = [axes]
@@ -369,7 +429,6 @@ if st.session_state['model'] is not None:
             colors = ['skyblue', 'lightcoral']
             labels = ['Orig', 'CF']
             
-            # Calculate Global Min/Max for plotting limits from training data
             data_min = st.session_state['data_tensor'].min(dim=0).values.cpu().numpy()
             data_max = st.session_state['data_tensor'].max(dim=0).values.cpu().numpy()
 
@@ -379,14 +438,17 @@ if st.session_state['model'] is not None:
                 bars[0].set_color(colors[0])
                 bars[1].set_color(colors[1])
                 
-                # Set Limits
+                # Dynamic Y-Limits
                 margin = (data_max[i] - data_min[i]) * 0.1
                 if margin == 0: margin = 1.0
                 ax.set_ylim(data_min[i] - margin, data_max[i] + margin)
                 
                 ax.set_title(var_names[i])
                 
-                # Highlight
+                for bar in bars:
+                    h = bar.get_height()
+                    ax.text(bar.get_x() + bar.get_width()/2, h, f"{h:.2f}", ha='center', va='bottom', fontsize=9)
+                
                 if i == target_idx:
                     ax.set_title(f"{var_names[i]} (Target)", color='blue', fontweight='bold')
                     for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
@@ -397,4 +459,4 @@ if st.session_state['model'] is not None:
             st.pyplot(fig)
 
 elif st.session_state['data_tensor'] is None:
-    st.info("👈 Please start by selecting a Data Mode.")
+    st.info("👈 Please start by selecting a Data Source in the Sidebar.")
