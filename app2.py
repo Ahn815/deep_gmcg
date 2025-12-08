@@ -441,7 +441,9 @@ if st.session_state['model'] is not None:
                     
                     bars = ax.bar(labels, vals)
                     bars[0].set_color(colors[0])
+                    bars[0].set_fontsize(18)
                     bars[1].set_color(colors[1])
+                    bars[1].set_fontsize(18)
                     
                     # Zero line for negative values
                     ax.axhline(0, color='black', linewidth=0.8, alpha=0.5)
@@ -453,7 +455,7 @@ if st.session_state['model'] is not None:
                     margin = span * 0.2
                     
                     ax.set_ylim(y_min - margin, y_max + margin)
-                    ax.set_title(var_name, fontsize=17, fontweight='bold')
+                    ax.set_title(var_name, fontsize=20)
                     
                     # Clean Annotations
                     for bar in bars:
@@ -467,10 +469,10 @@ if st.session_state['model'] is not None:
                     
                     # Highlight
                     if i == target_idx:
-                        ax.set_title(f"{var_name} (Target)", color='blue', fontweight='bold', fontsize=17)
+                        ax.set_title(f"{var_name} (Target)", color='blue', fontsize=20)
                         for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
                     elif i in out_indices:
-                        ax.set_title(f"{var_name} (Outcome)", color='red', fontweight='bold', fontsize=17)
+                        ax.set_title(f"{var_name} (Outcome)", color='red', fontsize=20)
                         
                 else:
                     ax.axis('off')
