@@ -441,9 +441,9 @@ if st.session_state['model'] is not None:
                     
                     bars = ax.bar(labels, vals)
                     bars[0].set_color(colors[0])
-                    bars[0].set_fontsize(18)
                     bars[1].set_color(colors[1])
-                    bars[1].set_fontsize(18)
+
+                    ax.tick_params(axis='x', labelsize=18)
                     
                     # Zero line for negative values
                     ax.axhline(0, color='black', linewidth=0.8, alpha=0.5)
