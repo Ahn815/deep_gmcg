@@ -407,7 +407,23 @@ if st.session_state['model'] is not None:
                 val_cf = cf_np[idx]
                 val_orig = orig_np[idx]
                 delta = val_cf - val_orig
-                with cols[i % len(cols)]: 
+                with cols[i % len(cols)]:
+                    st.markdown(
+                        """
+                        <style>
+                        /* Reduce the font size of the metric value (e.g., 10.10) */
+                        div[data-testid="metric-container"] > div > div:nth-child(1) {
+                        font-size: 22px !important;
+                        }
+                        
+                        /* Reduce the font size of the metric label (e.g., Week1) */
+                        div[data-testid="metric-container"] > div > div:nth-child(0) {
+                        font-size: 14px !important;
+                        }
+                        </style>
+                        """,
+                        unsafe_allow_html=True,
+                    )
                     st.metric(f"{name}", f"{val_cf:.2f}", f"{delta:+.2f}")
             
             # --- IMPROVED VISUALIZATION ---
