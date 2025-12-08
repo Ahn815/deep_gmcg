@@ -453,7 +453,7 @@ if st.session_state['model'] is not None:
                     margin = span * 0.2
                     
                     ax.set_ylim(y_min - margin, y_max + margin)
-                    ax.set_title(var_name, fontsize=11, fontweight='bold')
+                    ax.set_title(var_name, fontsize=15, fontweight='bold')
                     
                     # Clean Annotations
                     for bar in bars:
@@ -463,7 +463,7 @@ if st.session_state['model'] is not None:
                         # If positive, put text above; if negative, put text below
                         xy_pos = (bar.get_x() + bar.get_width()/2, h + offset if h >= 0 else h - offset*3)
                         
-                        ax.annotate(f"{h:.2f}", xy=xy_pos, ha='center', va='bottom', fontsize=8)
+                        ax.annotate(f"{h:.2f}", xy=xy_pos, ha='center', va='bottom', fontsize=12)
                     
                     # Highlight
                     if i == target_idx:
