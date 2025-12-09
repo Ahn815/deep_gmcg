@@ -410,10 +410,7 @@ if st.session_state['model'] is not None:
                 with cols[i % len(cols)]:
                     st.metric(f"{name}", f"{val_cf:.2f}", f"{delta:+.2f}")
             
-            # --- IMPROVED VISUALIZATION ---
-            
-            data_min = data.min(dim=0).values.cpu().numpy()
-            data_max = data.max(dim=0).values.cpu().numpy()
+            # --- GRAPH VISUALIZATION ---
             
             # Grid Layout: 4 cols per row
             cols_per_row = 4
@@ -442,32 +439,40 @@ if st.session_state['model'] is not None:
                     bars = ax.bar(labels, vals)
                     bars[0].set_color(colors[0])
                     bars[1].set_color(colors[1])
-
+                    
                     ax.tick_params(axis='x', labelsize=18)
                     
                     # Zero line for negative values
                     ax.axhline(0, color='black', linewidth=0.8, alpha=0.5)
                     
-                    # Robust Y-Limits
-                    y_min, y_max = data_min[i], data_max[i]
-                    span = y_max - y_min
+                    # --- MODIFIED: Y-Limits based ONLY on Current Patient + 0 ---
+                    # Logic: Determine range using only 0, Original value, and Counterfactual value
+                    scale_values = [0, orig_np[i], cf_np[i]]
+                    
+                    final_min = min(scale_values)
+                    final_max = max(scale_values)
+                    
+                    # Add 20% margin for annotations
+                    span = final_max - final_min
                     if span == 0: span = 1.0
                     margin = span * 0.2
                     
-                    ax.set_ylim(y_min - margin, y_max + margin)
+                    ax.set_ylim(final_min - margin, final_max + margin)
+                    # -----------------------------------------------------------
+
                     ax.set_title(var_name, fontsize=20)
                     
                     # Clean Annotations
                     for bar in bars:
                         h = bar.get_height()
-                        # Offset text slightly
+                        # Offset text slightly based on margin
                         offset = margin * 0.05
-                        # If positive, put text above; if negative, put text below
+                        # Position: Above bar if positive, below if negative
                         xy_pos = (bar.get_x() + bar.get_width()/2, h + offset if h >= 0 else h - offset*3)
                         
                         ax.annotate(f"{h:.2f}", xy=xy_pos, ha='center', va='bottom', fontsize=15)
                     
-                    # Highlight
+                    # Highlight Target and Outcome columns
                     if i == target_idx:
                         ax.set_title(f"{var_name} (Target)", color='blue', fontsize=20)
                         for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
@@ -475,6 +480,7 @@ if st.session_state['model'] is not None:
                         ax.set_title(f"{var_name} (Outcome)", color='red', fontsize=20)
                         
                 else:
+                    # Hide unused subplots
                     ax.axis('off')
 
             plt.tight_layout()
