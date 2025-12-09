@@ -460,7 +460,7 @@ if st.session_state['model'] is not None:
                     ax.set_ylim(final_min - margin, final_max + margin)
                     # -----------------------------------------------------------
 
-                    ax.set_title(var_name, fontsize=20)
+                    ax.set_title(var_name, fontsize=21)
                     
                     # Clean Annotations
                     for bar in bars:
@@ -474,10 +474,10 @@ if st.session_state['model'] is not None:
                     
                     # Highlight Target and Outcome columns
                     if i == target_idx:
-                        ax.set_title(f"{var_name} (Target)", color='blue', fontsize=20)
+                        ax.set_title(f"{var_name}", color='blue', fontsize=21)
                         for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
                     elif i in out_indices:
-                        ax.set_title(f"{var_name} (Outcome)", color='red', fontsize=20)
+                        ax.set_title(f"{var_name}", color='red', fontsize=21)
                         
                 else:
                     # Hide unused subplots
