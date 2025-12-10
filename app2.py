@@ -26,7 +26,7 @@ class RealNVP(nn.Module):
         self.dim = dim
         self.prior = D.MultivariateNormal(torch.zeros(dim, device=device), torch.eye(dim, device=device))
         
-        # Alternating binary masks
+        # Alternating binary masks for coupling layers
         mask = torch.zeros(dim, device=device)
         mask[::2] = 1
         masks = [mask] + [1 - mask] * (n_layers - 1)
@@ -164,7 +164,7 @@ st.markdown("### Precision ITE (Individual Treatment Effect) Platform")
 if 'model' not in st.session_state: st.session_state['model'] = None
 if 'data_tensor' not in st.session_state: st.session_state['data_tensor'] = None
 if 'col_config' not in st.session_state: st.session_state['col_config'] = {}
-if 'sim_results' not in st.session_state: st.session_state['sim_results'] = None  # NEW: For persistence
+if 'sim_results' not in st.session_state: st.session_state['sim_results'] = None
 
 # --- SIDEBAR: DATA SOURCE ---
 st.sidebar.header("1. Data Source")
@@ -211,6 +211,7 @@ outcome = (100 - 0.5 * dose - 0.2 * age + 10.0 * sex + np.random.normal(0, 5.0, 
             if df is not None:
                 st.sidebar.success(f"Generated {N_b} samples (Type B).")
                 
+                # Download Button
                 csv = df.to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="📥 Download Generated Data (CSV)",
@@ -292,13 +293,14 @@ if st.session_state['data_tensor'] is not None:
         
         col1, col2 = st.columns(2)
         with col1:
-            epochs = st.number_input("Epochs", 10, 5000, 300)
+            epochs = st.number_input("Epochs", 10, 5000, 50)
         with col2:
             lr = st.number_input("Learning Rate", 1e-5, 1e-2, 1e-3, format="%.5f")
         
         if st.button("Train SoloCausal Model"):
             data_tensor = st.session_state['data_tensor']
             
+            # Simple complexity adjustment for small/large data
             if N_samples < 1000:
                 n_layers, hidden_dim, wd = 2, 32, 1e-3
             else:
@@ -327,7 +329,7 @@ if st.session_state['data_tensor'] is not None:
                 
             prog.progress(1.0)
             st.session_state['model'] = model
-            st.session_state['sim_results'] = None # Clear old results on re-train
+            st.session_state['sim_results'] = None
             st.success("Model Trained!")
             
             fig, ax = plt.subplots(figsize=(8, 2))
@@ -364,9 +366,9 @@ if st.session_state['model'] is not None:
         current_val = float(orig_np[target_idx])
         target_val = st.number_input(f"Target Value for '{intervention_var}' (Current: {current_val:.2f})", value=current_val)
         
-        steps = st.number_input("Optimization Steps", 100, 10000, 2000, 100)
+        steps = st.number_input("Optimization Steps", 100, 10000, 5000, 100)
 
-        # 3. RUN SIMULATION (Compute Only)
+        # 3. Run Simulation Logic
         if st.button("Run Simulation"):
             z_init, _ = model(x_orig)
             z = z_init.clone().detach().requires_grad_(True)
@@ -401,7 +403,7 @@ if st.session_state['model'] is not None:
                 x_cf = model.inverse(z)
                 cf_np = x_cf[0].cpu().numpy()
             
-            # STORE RESULTS IN SESSION STATE (Key Fix)
+            # Store results in Session State
             st.session_state['sim_results'] = {
                 'orig_np': orig_np,
                 'cf_np': cf_np,
@@ -410,16 +412,17 @@ if st.session_state['model'] is not None:
                 'pat_id': pat_id
             }
 
-        # 4. DISPLAY RESULTS (Persistent)
+        # 4. Visualization & Metrics
         if st.session_state['sim_results'] is not None:
             res = st.session_state['sim_results']
             orig_res = res['orig_np']
             cf_res = res['cf_np']
             idx_tgt = res['target_idx']
+            int_var_name = res['intervention_var']
             
             st.write("### Result Comparison")
             
-            # --- Visual Mode Selection (Now persistent) ---
+            # Visualization Mode
             viz_mode = st.radio(
                 "Visualization Mode:", 
                 ["Individual Feature Bars (Default)", "Outcome Trajectory Plot (Longitudinal)"],
@@ -428,10 +431,10 @@ if st.session_state['model'] is not None:
             
             out_indices = [var_names.index(c) for c in config['out']]
             
-# --- MODE A: Trajectory Plot ---
+            # --- MODE A: Trajectory Plot ---
             if viz_mode == "Outcome Trajectory Plot (Longitudinal)":
                 if len(out_indices) < 2:
-                    st.warning("⚠️ Trajectory plot requires multiple outcome variables. Showing bar charts instead.")
+                    st.warning("⚠️ Trajectory plot requires multiple outcome variables (e.g., Week1-Week8). Showing bar charts instead.")
                 else:
                     fig_traj, ax = plt.subplots(figsize=(12, 6))
                     orig_traj = orig_res[out_indices]
@@ -439,7 +442,12 @@ if st.session_state['model'] is not None:
                     weeks = range(1, len(out_indices) + 1)
                     week_labels = [var_names[i] for i in out_indices]
                     
-                    # Create labels for Legend (Original vs CF with Dose values)
+                    # Safe retrieval of variables (prevents KeyError on reload)
+                    int_var_name = res.get('intervention_var', 'Intervention')
+                    idx_tgt = res.get('target_idx', 0)
+                    patient_id_disp = res.get('pat_id', 'Unknown') # Safety fallback
+                    
+                    # Create labels for Legend
                     val_orig_int = orig_res[idx_tgt]
                     val_cf_int = cf_res[idx_tgt]
                     label_orig = f"Original ({int_var_name}={val_orig_int:.1f})"
@@ -448,7 +456,7 @@ if st.session_state['model'] is not None:
                     ax.plot(weeks, orig_traj, 'o-', label=label_orig, color='skyblue', linewidth=3, markersize=8)
                     ax.plot(weeks, cf_traj, 'o--', label=label_cf, color='lightcoral', linewidth=3, markersize=8)
                     
-                    ax.set_title(f"Outcome Trajectory: Original vs Counterfactual (Patient {res['pat_id']})", fontsize=16, fontweight='bold')
+                    ax.set_title(f"Outcome Trajectory: Original vs Counterfactual (Patient {patient_id_disp})", fontsize=16, fontweight='bold')
                     ax.set_xlabel("Time Points", fontsize=12)
                     ax.set_ylabel("Outcome Value", fontsize=12)
                     ax.set_xticks(weeks)
@@ -462,14 +470,18 @@ if st.session_state['model'] is not None:
                     # Context Bars (Non-outcome variables)
                     st.write("#### Context & Intervention Variables")
                     other_indices = [i for i in range(dim) if i not in out_indices]
+                    
                     if other_indices:
                         cols_per_row = 4
                         num_rows = (len(other_indices) + cols_per_row - 1) // cols_per_row
-                        fig_ctx, axes_ctx = plt.subplots(num_rows, cols_per_row, figsize=(20, 4 * num_rows))
                         
-                        if num_rows == 1 and cols_per_row == 1: axes_flat = [axes_ctx]
-                        elif hasattr(axes_ctx, 'flatten'): axes_flat = axes_ctx.flatten()
-                        else: axes_flat = axes_ctx
+                        # Handle single row case correctly for subplots
+                        if num_rows == 1:
+                            fig_ctx, axes_ctx = plt.subplots(1, cols_per_row, figsize=(20, 4))
+                            axes_flat = axes_ctx if cols_per_row > 1 else [axes_ctx]
+                        else:
+                            fig_ctx, axes_ctx = plt.subplots(num_rows, cols_per_row, figsize=(20, 4 * num_rows))
+                            axes_flat = axes_ctx.flatten()
                         
                         for k, i in enumerate(other_indices):
                             ax = axes_flat[k]
@@ -498,14 +510,16 @@ if st.session_state['model'] is not None:
                                 ax.set_title(f"{var_name} (Target)", color='blue', fontweight='bold')
                                 for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
                         
-                        for k in range(len(other_indices), len(axes_flat)): axes_flat[k].axis('off')
+                        # Hide unused subplots
+                        for k in range(len(other_indices), len(axes_flat)): 
+                            axes_flat[k].axis('off')
+                            
                         plt.tight_layout()
                         st.pyplot(fig_ctx)
-                        
+
             # --- MODE B: Individual Bars ---
             if viz_mode == "Individual Feature Bars (Default)" or (viz_mode == "Outcome Trajectory Plot (Longitudinal)" and len(out_indices) < 2):
                 
-                # Outcome Metrics Display
                 cols = st.columns(len(out_indices))
                 for i, idx in enumerate(out_indices):
                     name = var_names[idx]
@@ -515,7 +529,6 @@ if st.session_state['model'] is not None:
                     with cols[i % len(cols)]: 
                         st.metric(f"{name}", f"{val_cf:.2f}", f"{delta:+.2f}")
 
-                # Grid Layout
                 cols_per_row = 4
                 num_rows = (dim + cols_per_row - 1) // cols_per_row
                 fig, axes = plt.subplots(num_rows, cols_per_row, figsize=(20, 5 * num_rows))
@@ -535,10 +548,10 @@ if st.session_state['model'] is not None:
                         bars = ax.bar(labels, vals)
                         bars[0].set_color(colors[0])
                         bars[1].set_color(colors[1])
-                        ax.tick_params(axis='x', labelsize=18)
+                        ax.tick_params(axis='x', labelsize=12)
                         ax.axhline(0, color='black', linewidth=0.8, alpha=0.5)
                         
-                        # Robust Y-Limits Logic
+                        # Robust Y-Limits Logic (Local to patient)
                         scale_values = [0, orig_res[i], cf_res[i]]
                         final_min = min(scale_values)
                         final_max = max(scale_values)
@@ -547,19 +560,19 @@ if st.session_state['model'] is not None:
                         margin = span * 0.2
                         ax.set_ylim(final_min - margin, final_max + margin)
                         
-                        ax.set_title(var_name, fontsize=21)
+                        ax.set_title(var_name, fontsize=14)
                         
                         for bar in bars:
                             h = bar.get_height()
                             offset = margin * 0.05
                             pos = h + offset if h >= 0 else h - offset * 3
-                            ax.annotate(f"{h:.2f}", xy=(bar.get_x() + bar.get_width()/2, pos), ha='center', va='bottom', fontsize=17)
+                            ax.annotate(f"{h:.2f}", xy=(bar.get_x() + bar.get_width()/2, pos), ha='center', va='bottom', fontsize=11)
                         
                         if i == idx_tgt:
-                            ax.set_title(f"{var_name}", color='blue', fontsize=21, fontweight='bold')
+                            ax.set_title(f"{var_name} (Target)", color='blue', fontsize=14, fontweight='bold')
                             for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
                         elif i in out_indices:
-                            ax.set_title(f"{var_name}", color='red', fontsize=21, fontweight='bold')
+                            ax.set_title(f"{var_name} (Outcome)", color='red', fontsize=14, fontweight='bold')
                     else:
                         ax.axis('off')
 
