@@ -528,7 +528,7 @@ if st.session_state['model'] is not None:
                         bars = ax.bar(labels, vals)
                         bars[0].set_color(colors[0])
                         bars[1].set_color(colors[1])
-                        ax.tick_params(axis='x', labelsize=12)
+                        ax.tick_params(axis='x', labelsize=18)
                         ax.axhline(0, color='black', linewidth=0.8, alpha=0.5)
                         
                         # Robust Y-Limits Logic
@@ -540,19 +540,19 @@ if st.session_state['model'] is not None:
                         margin = span * 0.2
                         ax.set_ylim(final_min - margin, final_max + margin)
                         
-                        ax.set_title(var_name, fontsize=14)
+                        ax.set_title(var_name, fontsize=21)
                         
                         for bar in bars:
                             h = bar.get_height()
                             offset = margin * 0.05
                             pos = h + offset if h >= 0 else h - offset * 3
-                            ax.annotate(f"{h:.2f}", xy=(bar.get_x() + bar.get_width()/2, pos), ha='center', va='bottom', fontsize=11)
+                            ax.annotate(f"{h:.2f}", xy=(bar.get_x() + bar.get_width()/2, pos), ha='center', va='bottom', fontsize=17)
                         
                         if i == idx_tgt:
-                            ax.set_title(f"{var_name} (Target)", color='blue', fontsize=14, fontweight='bold')
+                            ax.set_title(f"{var_name}", color='blue', fontsize=21, fontweight='bold')
                             for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
                         elif i in out_indices:
-                            ax.set_title(f"{var_name} (Outcome)", color='red', fontsize=14, fontweight='bold')
+                            ax.set_title(f"{var_name}", color='red', fontsize=21, fontweight='bold')
                     else:
                         ax.axis('off')
 
