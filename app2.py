@@ -406,7 +406,8 @@ if st.session_state['model'] is not None:
                 'orig_np': orig_np,
                 'cf_np': cf_np,
                 'target_idx': target_idx,
-                'intervention_var': intervention_var
+                'intervention_var': intervention_var,
+                'pat_id': pat_id
             }
 
         # 4. DISPLAY RESULTS (Persistent)
@@ -441,7 +442,7 @@ if st.session_state['model'] is not None:
                     ax.plot(weeks, orig_traj, 'o-', label='Original (Factual)', color='skyblue', linewidth=3, markersize=8)
                     ax.plot(weeks, cf_traj, 'o--', label='Counterfactual', color='lightcoral', linewidth=3, markersize=8)
                     
-                    ax.set_title("Outcome Trajectory: Original vs Counterfactual", fontsize=16, fontweight='bold')
+                    ax.set_title(f"Outcome Trajectory: Original vs Counterfactual (Patient {res['pat_id']})", fontsize=16, fontweight='bold')
                     ax.set_xlabel("Time Points", fontsize=12)
                     ax.set_ylabel("Outcome Value", fontsize=12)
                     ax.set_xticks(weeks)
