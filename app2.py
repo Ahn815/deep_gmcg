@@ -428,10 +428,10 @@ if st.session_state['model'] is not None:
             
             out_indices = [var_names.index(c) for c in config['out']]
             
-            # --- MODE A: Trajectory Plot ---
+# --- MODE A: Trajectory Plot ---
             if viz_mode == "Outcome Trajectory Plot (Longitudinal)":
                 if len(out_indices) < 2:
-                    st.warning("⚠️ Trajectory plot requires multiple outcome variables (e.g., Week1-Week8). Showing bars instead.")
+                    st.warning("⚠️ Trajectory plot requires multiple outcome variables. Showing bar charts instead.")
                 else:
                     fig_traj, ax = plt.subplots(figsize=(12, 6))
                     orig_traj = orig_res[out_indices]
@@ -439,8 +439,14 @@ if st.session_state['model'] is not None:
                     weeks = range(1, len(out_indices) + 1)
                     week_labels = [var_names[i] for i in out_indices]
                     
-                    ax.plot(weeks, orig_traj, 'o-', label='Original (Factual)', color='skyblue', linewidth=3, markersize=8)
-                    ax.plot(weeks, cf_traj, 'o--', label='Counterfactual', color='lightcoral', linewidth=3, markersize=8)
+                    # Create labels for Legend (Original vs CF with Dose values)
+                    val_orig_int = orig_res[idx_tgt]
+                    val_cf_int = cf_res[idx_tgt]
+                    label_orig = f"Original ({int_var_name}={val_orig_int:.1f})"
+                    label_cf = f"Counterfactual ({int_var_name}={val_cf_int:.1f})"
+                    
+                    ax.plot(weeks, orig_traj, 'o-', label=label_orig, color='skyblue', linewidth=3, markersize=8)
+                    ax.plot(weeks, cf_traj, 'o--', label=label_cf, color='lightcoral', linewidth=3, markersize=8)
                     
                     ax.set_title(f"Outcome Trajectory: Original vs Counterfactual (Patient {res['pat_id']})", fontsize=16, fontweight='bold')
                     ax.set_xlabel("Time Points", fontsize=12)
@@ -453,7 +459,7 @@ if st.session_state['model'] is not None:
                     
                     st.pyplot(fig_traj)
 
-                    # Context Bars
+                    # Context Bars (Non-outcome variables)
                     st.write("#### Context & Intervention Variables")
                     other_indices = [i for i in range(dim) if i not in out_indices]
                     if other_indices:
@@ -473,7 +479,7 @@ if st.session_state['model'] is not None:
                             bars[0].set_color('skyblue')
                             bars[1].set_color('lightcoral')
                             
-                            # Y-Limits (Local)
+                            # Local Y-Limits
                             scale_vals = [0, orig_res[i], cf_res[i]]
                             ymin, ymax = min(scale_vals), max(scale_vals)
                             span = ymax - ymin
@@ -495,7 +501,7 @@ if st.session_state['model'] is not None:
                         for k in range(len(other_indices), len(axes_flat)): axes_flat[k].axis('off')
                         plt.tight_layout()
                         st.pyplot(fig_ctx)
-
+                        
             # --- MODE B: Individual Bars ---
             if viz_mode == "Individual Feature Bars (Default)" or (viz_mode == "Outcome Trajectory Plot (Longitudinal)" and len(out_indices) < 2):
                 
