@@ -450,7 +450,7 @@ if st.session_state['model'] is not None:
                     # Create labels for Legend
                     val_orig_int = orig_res[idx_tgt]
                     val_cf_int = cf_res[idx_tgt]
-                    label_orig = f"       Factual ({int_var_name}={val_orig_int:.1f})"
+                    label_orig = f"Factual          ({int_var_name}={val_orig_int:.1f})"
                     label_cf = f"Counterfactual ({int_var_name}={val_cf_int:.1f})"
                     
                     ax.plot(weeks, orig_traj, 'o-', label=label_orig, color='skyblue', linewidth=3, markersize=8)
