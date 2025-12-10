@@ -409,82 +409,154 @@ if st.session_state['model'] is not None:
                 delta = val_cf - val_orig
                 with cols[i % len(cols)]:
                     st.metric(f"{name}", f"{val_cf:.2f}", f"{delta:+.2f}")
-            
-            # --- GRAPH VISUALIZATION ---
-            
-            # Grid Layout: 4 cols per row
-            cols_per_row = 4
-            num_rows = (dim + cols_per_row - 1) // cols_per_row
-            
-            fig, axes = plt.subplots(num_rows, cols_per_row, figsize=(20, 5 * num_rows))
-            
-            # Helper to handle single vs multiple axes
-            if num_rows == 1 and cols_per_row == 1:
-                axes_flat = [axes]
-            elif hasattr(axes, 'flatten'):
-                axes_flat = axes.flatten()
-            else:
-                axes_flat = axes
-            
-            colors = ['skyblue', 'lightcoral']
-            labels = ['Orig', 'CF']
-
-            for i in range(len(axes_flat)):
-                ax = axes_flat[i]
-                
-                if i < dim: # Valid variable index
-                    var_name = var_names[i]
-                    vals = [orig_np[i], cf_np[i]]
-                    
-                    bars = ax.bar(labels, vals)
-                    bars[0].set_color(colors[0])
-                    bars[1].set_color(colors[1])
-                    
-                    ax.tick_params(axis='x', labelsize=18)
-                    
-                    # Zero line for negative values
-                    ax.axhline(0, color='black', linewidth=0.8, alpha=0.5)
-                    
-                    # --- MODIFIED: Y-Limits based ONLY on Current Patient + 0 ---
-                    # Logic: Determine range using only 0, Original value, and Counterfactual value
-                    scale_values = [0, orig_np[i], cf_np[i]]
-                    
-                    final_min = min(scale_values)
-                    final_max = max(scale_values)
-                    
-                    # Add 20% margin for annotations
-                    span = final_max - final_min
-                    if span == 0: span = 1.0
-                    margin = span * 0.2
-                    
-                    ax.set_ylim(final_min - margin, final_max + margin)
-                    # -----------------------------------------------------------
-
-                    ax.set_title(var_name, fontsize=21)
-                    
-                    # Clean Annotations
-                    for bar in bars:
-                        h = bar.get_height()
-                        # Offset text slightly based on margin
-                        offset = margin * 0.05
-                        # Position: Above bar if positive, below if negative
-                        xy_pos = (bar.get_x() + bar.get_width()/2, h + offset if h >= 0 else h - offset*3)
                         
-                        ax.annotate(f"{h:.2f}", xy=xy_pos, ha='center', va='bottom', fontsize=15)
-                    
-                    # Highlight Target and Outcome columns
-                    if i == target_idx:
-                        ax.set_title(f"{var_name}", color='blue', fontsize=21)
-                        for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
-                    elif i in out_indices:
-                        ax.set_title(f"{var_name}", color='red', fontsize=21)
-                        
+            st.write("### Result Comparison")
+            
+            # --- NEW: VISUALIZATION MODE SELECTION ---
+            viz_mode = st.radio(
+                "Visualization Mode:", 
+                ["Individual Feature Bars (Default)", "Outcome Trajectory Plot (Longitudinal)"],
+                horizontal=True
+            )
+            
+            out_indices = [var_names.index(c) for c in config['out']]
+            
+            # --- MODE A: TRAJECTORY PLOT (For Longitudinal Data) ---
+            if viz_mode == "Outcome Trajectory Plot (Longitudinal)":
+                if len(out_indices) < 2:
+                    st.warning("⚠️ Trajectory plot requires multiple outcome variables. Showing bar charts instead.")
                 else:
-                    # Hide unused subplots
-                    ax.axis('off')
+                    # 1. Main Trajectory Plot (Outcomes)
+                    fig_traj, ax = plt.subplots(figsize=(12, 6))
+                    
+                    # Extract Outcome Data
+                    orig_traj = orig_np[out_indices]
+                    cf_traj = cf_np[out_indices]
+                    weeks = range(1, len(out_indices) + 1)
+                    week_labels = [var_names[i] for i in out_indices]
+                    
+                    # Plot Lines
+                    ax.plot(weeks, orig_traj, 'o-', label='Original (Factual)', color='skyblue', linewidth=3, markersize=8)
+                    ax.plot(weeks, cf_traj, 'o--', label='Counterfactual', color='lightcoral', linewidth=3, markersize=8)
+                    
+                    # Visual Styling
+                    ax.set_title("Outcome Trajectory: Original vs Counterfactual", fontsize=16, fontweight='bold')
+                    ax.set_xlabel("Time Points (Weeks)", fontsize=12)
+                    ax.set_ylabel("Outcome Value", fontsize=12)
+                    ax.set_xticks(weeks)
+                    ax.set_xticklabels(week_labels, rotation=45)
+                    ax.legend(fontsize=12)
+                    ax.grid(True, linestyle='--', alpha=0.6)
+                    
+                    # Fill area between lines to show ITE
+                    ax.fill_between(weeks, orig_traj, cf_traj, color='gray', alpha=0.1, label='Difference')
+                    
+                    st.pyplot(fig_traj)
+                    
+                    # 2. Context Variables (Pre-treatment & Intervention) as Small Bars
+                    st.write("#### Context & Intervention Variables")
+                    other_indices = [i for i in range(dim) if i not in out_indices]
+                    
+                    if other_indices:
+                        cols_per_row = 4
+                        num_rows = (len(other_indices) + cols_per_row - 1) // cols_per_row
+                        fig_ctx, axes_ctx = plt.subplots(num_rows, cols_per_row, figsize=(20, 4 * num_rows))
+                        
+                        if num_rows == 1 and cols_per_row == 1: axes_flat = [axes_ctx]
+                        elif hasattr(axes_ctx, 'flatten'): axes_flat = axes_ctx.flatten()
+                        else: axes_flat = axes_ctx
+                        
+                        for k, i in enumerate(other_indices):
+                            ax = axes_flat[k]
+                            var_name = var_names[i]
+                            vals = [orig_np[i], cf_np[i]]
+                            
+                            bars = ax.bar(['Orig', 'CF'], vals)
+                            bars[0].set_color('skyblue')
+                            bars[1].set_color('lightcoral')
+                            
+                            # Annotate
+                            for bar in bars:
+                                h = bar.get_height()
+                                ax.text(bar.get_x() + bar.get_width()/2, h, f"{h:.2f}", ha='center', va='bottom', fontsize=9)
+                            
+                            ax.set_title(var_name, fontsize=10, fontweight='bold')
+                            
+                            if i == target_idx:
+                                ax.set_title(f"{var_name} (Target)", color='blue', fontweight='bold')
+                                for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
+                        
+                        # Hide unused
+                        for k in range(len(other_indices), len(axes_flat)):
+                            axes_flat[k].axis('off')
+                            
+                        plt.tight_layout()
+                        st.pyplot(fig_ctx)
 
-            plt.tight_layout()
-            st.pyplot(fig)
+            # --- MODE B: INDIVIDUAL BARS (Existing Logic) ---
+            if viz_mode == "Individual Feature Bars (Default)" or (viz_mode == "Outcome Trajectory Plot (Longitudinal)" and len(out_indices) < 2):
+                
+                # Calculate Global Data Min/Max
+                data_min = data.min(dim=0).values.cpu().numpy()
+                data_max = data.max(dim=0).values.cpu().numpy()
+                
+                # Grid Layout: 4 cols per row
+                cols_per_row = 4
+                num_rows = (dim + cols_per_row - 1) // cols_per_row
+                
+                fig, axes = plt.subplots(num_rows, cols_per_row, figsize=(20, 5 * num_rows))
+                
+                if num_rows == 1 and cols_per_row == 1: axes_flat = [axes]
+                elif hasattr(axes, 'flatten'): axes_flat = axes.flatten()
+                else: axes_flat = axes
+                
+                colors = ['skyblue', 'lightcoral']
+                labels = ['Orig', 'CF']
+
+                for i in range(len(axes_flat)):
+                    ax = axes_flat[i]
+                    
+                    if i < dim: 
+                        var_name = var_names[i]
+                        vals = [orig_np[i], cf_np[i]]
+                        
+                        bars = ax.bar(labels, vals)
+                        bars[0].set_color(colors[0])
+                        bars[1].set_color(colors[1])
+                        
+                        ax.tick_params(axis='x', labelsize=12)
+                        ax.axhline(0, color='black', linewidth=0.8, alpha=0.5)
+                        
+                        # Robust Y-Limits Logic
+                        scale_values = [0, orig_np[i], cf_np[i]]
+                        final_min = min(scale_values)
+                        final_max = max(scale_values)
+                        
+                        span = final_max - final_min
+                        if span == 0: span = 1.0
+                        margin = span * 0.2
+                        
+                        ax.set_ylim(final_min - margin, final_max + margin)
+                        ax.set_title(var_name, fontsize=14)
+                        
+                        # Annotations
+                        for bar in bars:
+                            h = bar.get_height()
+                            offset = margin * 0.05
+                            pos = h + offset if h >= 0 else h - offset*3
+                            ax.annotate(f"{h:.2f}", xy=(bar.get_x() + bar.get_width()/2, pos), ha='center', va='bottom', fontsize=11)
+                        
+                        if i == target_idx:
+                            ax.set_title(f"{var_name} (Target)", color='blue', fontsize=14, fontweight='bold')
+                            for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
+                        elif i in out_indices:
+                            ax.set_title(f"{var_name} (Outcome)", color='red', fontsize=14, fontweight='bold')
+                            
+                    else:
+                        ax.axis('off')
+
+                plt.tight_layout()
+                st.pyplot(fig)
 
 elif st.session_state['data_tensor'] is None:
     st.info("👈 Please start by selecting a Data Source in the Sidebar.")
