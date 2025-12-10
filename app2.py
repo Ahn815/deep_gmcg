@@ -450,7 +450,7 @@ if st.session_state['model'] is not None:
                     # Create labels for Legend
                     val_orig_int = orig_res[idx_tgt]
                     val_cf_int = cf_res[idx_tgt]
-                    label_orig = f"Original ({int_var_name}={val_orig_int:.1f})"
+                    label_orig = f"       Factual ({int_var_name}={val_orig_int:.1f})"
                     label_cf = f"Counterfactual ({int_var_name}={val_cf_int:.1f})"
                     
                     ax.plot(weeks, orig_traj, 'o-', label=label_orig, color='skyblue', linewidth=3, markersize=8)
@@ -548,7 +548,7 @@ if st.session_state['model'] is not None:
                         bars = ax.bar(labels, vals)
                         bars[0].set_color(colors[0])
                         bars[1].set_color(colors[1])
-                        ax.tick_params(axis='x', labelsize=12)
+                        ax.tick_params(axis='x', labelsize=19)
                         ax.axhline(0, color='black', linewidth=0.8, alpha=0.5)
                         
                         # Robust Y-Limits Logic (Local to patient)
@@ -560,19 +560,19 @@ if st.session_state['model'] is not None:
                         margin = span * 0.2
                         ax.set_ylim(final_min - margin, final_max + margin)
                         
-                        ax.set_title(var_name, fontsize=14)
+                        ax.set_title(var_name, fontsize=22)
                         
                         for bar in bars:
                             h = bar.get_height()
                             offset = margin * 0.05
                             pos = h + offset if h >= 0 else h - offset * 3
-                            ax.annotate(f"{h:.2f}", xy=(bar.get_x() + bar.get_width()/2, pos), ha='center', va='bottom', fontsize=11)
+                            ax.annotate(f"{h:.2f}", xy=(bar.get_x() + bar.get_width()/2, pos), ha='center', va='bottom', fontsize=18)
                         
                         if i == idx_tgt:
-                            ax.set_title(f"{var_name} (Target)", color='blue', fontsize=14, fontweight='bold')
+                            ax.set_title(f"{var_name} (Target)", color='blue', fontsize=22, fontweight='bold')
                             for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
                         elif i in out_indices:
-                            ax.set_title(f"{var_name} (Outcome)", color='red', fontsize=14, fontweight='bold')
+                            ax.set_title(f"{var_name} (Outcome)", color='red', fontsize=22, fontweight='bold')
                     else:
                         ax.axis('off')
 
