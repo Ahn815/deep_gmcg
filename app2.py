@@ -569,10 +569,10 @@ if st.session_state['model'] is not None:
                             ax.annotate(f"{h:.2f}", xy=(bar.get_x() + bar.get_width()/2, pos), ha='center', va='bottom', fontsize=18)
                         
                         if i == idx_tgt:
-                            ax.set_title(f"{var_name} (Target)", color='blue', fontsize=22, fontweight='bold')
-                            for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
+                            ax.set_title(f"{var_name}", color='blue', fontsize=22)
+                            #for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
                         elif i in out_indices:
-                            ax.set_title(f"{var_name} (Outcome)", color='red', fontsize=22, fontweight='bold')
+                            ax.set_title(f"{var_name}", color='red', fontsize=22)
                     else:
                         ax.axis('off')
 
