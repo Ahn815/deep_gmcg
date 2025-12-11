@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader, TensorDataset, random_split
 import numpy as np
 import matplotlib.pyplot as plt
 import io
+import copy
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -26,7 +27,6 @@ class RealNVP(nn.Module):
         self.dim = dim
         self.prior = D.MultivariateNormal(torch.zeros(dim, device=device), torch.eye(dim, device=device))
         
-        # Alternating binary masks for coupling layers
         mask = torch.zeros(dim, device=device)
         mask[::2] = 1
         masks = [mask] + [1 - mask] * (n_layers - 1)
@@ -160,11 +160,12 @@ def load_clinical_data(uploaded_file):
 st.title("🧬 SoloCausal AI")
 st.markdown("### Precision ITE (Individual Treatment Effect) Platform")
 
-# Session State
+# Session State Initialization
 if 'model' not in st.session_state: st.session_state['model'] = None
 if 'data_tensor' not in st.session_state: st.session_state['data_tensor'] = None
 if 'col_config' not in st.session_state: st.session_state['col_config'] = {}
 if 'sim_results' not in st.session_state: st.session_state['sim_results'] = None
+if 'loss_history' not in st.session_state: st.session_state['loss_history'] = None # Store loss for persistence
 
 # --- SIDEBAR: DATA SOURCE ---
 st.sidebar.header("1. Data Source")
@@ -201,6 +202,7 @@ outcome = (100 - 0.5 * dose - 0.2 * age + 10.0 * sex + np.random.normal(0, 5.0, 
                 st.session_state['data_tensor'] = torch.FloatTensor(df.values).to(device)
                 st.session_state['model'] = None
                 st.session_state['sim_results'] = None
+                st.session_state['loss_history'] = None
 
     elif sim_type == "Type B: Longitudinal (8-Week Trial)":
         st.sidebar.markdown("**Type B: Age, Sex, Dose -> Week1...Week8**")
@@ -211,7 +213,6 @@ outcome = (100 - 0.5 * dose - 0.2 * age + 10.0 * sex + np.random.normal(0, 5.0, 
             if df is not None:
                 st.sidebar.success(f"Generated {N_b} samples (Type B).")
                 
-                # Download Button
                 csv = df.to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="📥 Download Generated Data (CSV)",
@@ -230,6 +231,7 @@ outcome = (100 - 0.5 * dose - 0.2 * age + 10.0 * sex + np.random.normal(0, 5.0, 
                 st.session_state['data_tensor'] = torch.FloatTensor(df[training_cols].values).to(device)
                 st.session_state['model'] = None
                 st.session_state['sim_results'] = None
+                st.session_state['loss_history'] = None
                 st.dataframe(df.head(3))
 
 elif data_source == "Option 2: Clinical Data Upload":
@@ -275,6 +277,7 @@ if df is not None and data_source == "Option 2: Clinical Data Upload":
             st.session_state['data_tensor'] = torch.FloatTensor(ordered_data).to(device)
             st.session_state['model'] = None
             st.session_state['sim_results'] = None
+            st.session_state['loss_history'] = None
             st.success("Configuration Saved.")
             st.dataframe(df[ordered_cols].head(3))
 
@@ -291,31 +294,38 @@ if st.session_state['data_tensor'] is not None:
         
         st.subheader(f"3. Model Training (N={N_samples}, Dim={dim})")
         
-        col1, col2 = st.columns(2)
+        # Training Parameters
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             epochs = st.number_input("Epochs", 10, 5000, 300)
         with col2:
             lr = st.number_input("Learning Rate", 1e-5, 1e-2, 1e-3, format="%.5f")
+        with col3:
+            # Added: Validation Split Slider
+            val_ratio = st.slider("Validation Split", 0.1, 0.5, 0.2, 0.05, format="%d%%")
+        with col4:
+            # Added: Early Stopping Option
+            use_early_stopping = st.checkbox("Use Early Stopping", value=True)
+            patience = 20
+            if use_early_stopping:
+                patience = st.number_input("Patience (Epochs)", 5, 100, 20)
         
         if st.button("Train SoloCausal Model"):
             data_tensor = st.session_state['data_tensor']
             
-            # --- 1. Split Data into Train (80%) and Validation (20%) ---
-            train_size = int(0.8 * N_samples)
-            val_size = N_samples - train_size
+            # --- 1. Split Data (Dynamic) ---
+            val_size = int(val_ratio * N_samples)
+            train_size = N_samples - val_size
             
-            # Use random_split to create datasets
             full_dataset = TensorDataset(data_tensor)
             train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
             
             # --- 2. Create DataLoaders ---
-            # Batch size is adapted to training size
             batch_size = min(128, train_size)
             train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-            # Validation loader (no shuffle needed)
             val_loader = DataLoader(val_dataset, batch_size=min(128, val_size), shuffle=False)
             
-            # Simple complexity adjustment for small/large data
+            # Complexity adjustment
             if train_size < 1000:
                 n_layers, hidden_dim, wd = 2, 32, 1e-3
             else:
@@ -326,7 +336,14 @@ if st.session_state['data_tensor'] is not None:
             
             model.train()
             prog = st.progress(0)
+            status = st.empty()
+            
             val_loss_hist = []
+            
+            # Early Stopping Variables
+            best_val_loss = float('inf')
+            early_stop_counter = 0
+            best_model_state = None
             
             # --- 3. Training Loop ---
             for epoch in range(epochs):
@@ -338,7 +355,7 @@ if st.session_state['data_tensor'] is not None:
                     loss.backward()
                     optimizer.step()
                 
-                # B. Validation Step (Calculate loss on 20% Val data)
+                # B. Validation Step
                 model.eval()
                 val_loss_sum = 0.0
                 with torch.no_grad():
@@ -346,32 +363,48 @@ if st.session_state['data_tensor'] is not None:
                         val_loss = -model.log_prob(batch[0]).mean()
                         val_loss_sum += val_loss.item()
                 
-                # Average Validation Loss for this epoch
-                if len(val_loader) > 0:
-                    avg_val_loss = val_loss_sum / len(val_loader)
-                else:
-                    avg_val_loss = 0
-                
+                avg_val_loss = val_loss_sum / len(val_loader) if len(val_loader) > 0 else 0
                 val_loss_hist.append(avg_val_loss)
                 
-                if epoch % 10 == 0: prog.progress((epoch+1)/epochs)
-                
+                # Update Progress
+                if epoch % 10 == 0: 
+                    prog.progress((epoch+1)/epochs)
+                    status.text(f"Epoch {epoch}/{epochs} | Val Loss: {avg_val_loss:.4f}")
+
+                # C. Early Stopping Check
+                if use_early_stopping:
+                    if avg_val_loss < best_val_loss:
+                        best_val_loss = avg_val_loss
+                        best_model_state = copy.deepcopy(model.state_dict())
+                        early_stop_counter = 0
+                    else:
+                        early_stop_counter += 1
+                        if early_stop_counter >= patience:
+                            status.warning(f"Early Stopping triggered at epoch {epoch}. Restoring best model.")
+                            model.load_state_dict(best_model_state)
+                            break
+            
             prog.progress(1.0)
+            
+            # Restore best model if finished without early stop but option was on
+            if use_early_stopping and best_model_state is not None and early_stop_counter < patience:
+                 model.load_state_dict(best_model_state)
+
             st.session_state['model'] = model
             st.session_state['sim_results'] = None
-            st.success("Model Trained!")
+            st.session_state['loss_history'] = val_loss_hist # Store for persistence
+            st.success(f"Model Trained! Best Val Loss: {min(val_loss_hist):.4f}")
             
-            # --- 4. Plot Validation Loss ---
+        # --- 4. Plot Loss (Persistent) ---
+        if st.session_state['loss_history'] is not None:
             fig, ax = plt.subplots(figsize=(8, 2))
-            ax.plot(val_loss_hist, label='Validation Loss', color='orange')
-            
+            ax.plot(st.session_state['loss_history'], label='Validation Loss', color='orange')
             ax.set_yscale('log') 
-            ax.set_title("Validation Loss (Negative Log-Likelihood, Log Scale)")
+            ax.set_title("Validation Loss History (Log Scale)")
             ax.set_xlabel("Epoch")
-            ax.set_ylabel("Loss")
+            ax.set_ylabel("NLL Loss")
             ax.grid(True, which="both", ls="--", alpha=0.5)
             ax.legend()
-            
             st.pyplot(fig)
 
 # --- INFERENCE ---
@@ -500,7 +533,7 @@ if st.session_state['model'] is not None:
                     
                     st.pyplot(fig_traj)
 
-                    # Context Bars (Non-outcome variables)
+                    # Context Bars
                     st.write("#### Context & Intervention Variables")
                     other_indices = [i for i in range(dim) if i not in out_indices]
                     
