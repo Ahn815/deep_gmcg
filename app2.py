@@ -293,15 +293,30 @@ if st.session_state['data_tensor'] is not None:
         
         col1, col2 = st.columns(2)
         with col1:
-            epochs = st.number_input("Epochs", 10, 5000, 50)
+            epochs = st.number_input("Epochs", 10, 5000, 300)
         with col2:
             lr = st.number_input("Learning Rate", 1e-5, 1e-2, 1e-3, format="%.5f")
         
         if st.button("Train SoloCausal Model"):
             data_tensor = st.session_state['data_tensor']
             
+            # --- 1. Split Data into Train (80%) and Validation (20%) ---
+            train_size = int(0.8 * N_samples)
+            val_size = N_samples - train_size
+            
+            # Use random_split to create datasets
+            full_dataset = TensorDataset(data_tensor)
+            train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+            
+            # --- 2. Create DataLoaders ---
+            # Batch size is adapted to training size
+            batch_size = min(128, train_size)
+            train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+            # Validation loader (no shuffle needed)
+            val_loader = DataLoader(val_dataset, batch_size=min(128, val_size), shuffle=False)
+            
             # Simple complexity adjustment for small/large data
-            if N_samples < 1000:
+            if train_size < 1000:
                 n_layers, hidden_dim, wd = 2, 32, 1e-3
             else:
                 n_layers, hidden_dim, wd = 4, 64, 0.0
@@ -309,21 +324,35 @@ if st.session_state['data_tensor'] is not None:
             model = RealNVP(dim=dim, n_layers=n_layers, hidden_dim=hidden_dim).to(device)
             optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
             
-            train_loader = DataLoader(TensorDataset(data_tensor), batch_size=min(128, N_samples), shuffle=True)
-            
             model.train()
             prog = st.progress(0)
-            loss_hist = []
+            val_loss_hist = []
             
+            # --- 3. Training Loop ---
             for epoch in range(epochs):
-                epoch_loss = 0
+                # A. Training Step
+                model.train()
                 for batch in train_loader:
                     optimizer.zero_grad()
                     loss = -model.log_prob(batch[0]).mean()
                     loss.backward()
                     optimizer.step()
-                    epoch_loss += loss.item()
-                loss_hist.append(epoch_loss / len(train_loader))
+                
+                # B. Validation Step (Calculate loss on 20% Val data)
+                model.eval()
+                val_loss_sum = 0.0
+                with torch.no_grad():
+                    for batch in val_loader:
+                        val_loss = -model.log_prob(batch[0]).mean()
+                        val_loss_sum += val_loss.item()
+                
+                # Average Validation Loss for this epoch
+                if len(val_loader) > 0:
+                    avg_val_loss = val_loss_sum / len(val_loader)
+                else:
+                    avg_val_loss = 0
+                
+                val_loss_hist.append(avg_val_loss)
                 
                 if epoch % 10 == 0: prog.progress((epoch+1)/epochs)
                 
@@ -332,13 +361,16 @@ if st.session_state['data_tensor'] is not None:
             st.session_state['sim_results'] = None
             st.success("Model Trained!")
             
+            # --- 4. Plot Validation Loss ---
             fig, ax = plt.subplots(figsize=(8, 2))
-            ax.plot(loss_hist)
-            ax.set_title("Training Loss")
-
+            ax.plot(val_loss_hist, label='Validation Loss', color='orange')
+            
             ax.set_yscale('log') 
-            ax.set_title("Training Loss (Log Scale)")
+            ax.set_title("Validation Loss (Negative Log-Likelihood, Log Scale)")
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Loss")
             ax.grid(True, which="both", ls="--", alpha=0.5)
+            ax.legend()
             
             st.pyplot(fig)
 
@@ -423,7 +455,8 @@ if st.session_state['model'] is not None:
             orig_res = res['orig_np']
             cf_res = res['cf_np']
             idx_tgt = res['target_idx']
-            int_var_name = res['intervention_var']
+            int_var_name = res.get('intervention_var', 'Intervention')
+            patient_id_disp = res.get('pat_id', 'Unknown') 
             
             st.write("### Result Comparison")
             
@@ -447,21 +480,16 @@ if st.session_state['model'] is not None:
                     weeks = range(1, len(out_indices) + 1)
                     week_labels = [var_names[i] for i in out_indices]
                     
-                    # Safe retrieval of variables (prevents KeyError on reload)
-                    int_var_name = res.get('intervention_var', 'Intervention')
-                    idx_tgt = res.get('target_idx', 0)
-                    patient_id_disp = res.get('pat_id', 'Unknown') # Safety fallback
-                    
                     # Create labels for Legend
                     val_orig_int = orig_res[idx_tgt]
                     val_cf_int = cf_res[idx_tgt]
-                    label_orig = f"Factual             ({int_var_name}={val_orig_int:.1f})"
+                    label_orig = f"Original ({int_var_name}={val_orig_int:.1f})"
                     label_cf = f"Counterfactual ({int_var_name}={val_cf_int:.1f})"
                     
                     ax.plot(weeks, orig_traj, 'o-', label=label_orig, color='skyblue', linewidth=3, markersize=8)
                     ax.plot(weeks, cf_traj, 'o--', label=label_cf, color='lightcoral', linewidth=3, markersize=8)
                     
-                    ax.set_title(f"Outcome Trajectory: Original vs Counterfactual (Patient ID: {patient_id_disp})", fontsize=16, fontweight='bold')
+                    ax.set_title(f"Outcome Trajectory: Original vs Counterfactual (Patient {patient_id_disp})", fontsize=16, fontweight='bold')
                     ax.set_xlabel("Time Points", fontsize=12)
                     ax.set_ylabel("Outcome Value", fontsize=12)
                     ax.set_xticks(weeks)
@@ -480,7 +508,6 @@ if st.session_state['model'] is not None:
                         cols_per_row = 4
                         num_rows = (len(other_indices) + cols_per_row - 1) // cols_per_row
                         
-                        # Handle single row case correctly for subplots
                         if num_rows == 1:
                             fig_ctx, axes_ctx = plt.subplots(1, cols_per_row, figsize=(20, 4))
                             axes_flat = axes_ctx if cols_per_row > 1 else [axes_ctx]
@@ -515,7 +542,6 @@ if st.session_state['model'] is not None:
                                 ax.set_title(f"{var_name} (Target)", color='blue', fontweight='bold')
                                 for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
                         
-                        # Hide unused subplots
                         for k in range(len(other_indices), len(axes_flat)): 
                             axes_flat[k].axis('off')
                             
@@ -575,7 +601,6 @@ if st.session_state['model'] is not None:
                         
                         if i == idx_tgt:
                             ax.set_title(f"{var_name}", color='blue', fontsize=22)
-                            #for s in ax.spines.values(): s.set_edgecolor('blue'); s.set_linewidth(2)
                         elif i in out_indices:
                             ax.set_title(f"{var_name}", color='red', fontsize=22)
                     else:
