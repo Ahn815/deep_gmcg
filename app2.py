@@ -27,6 +27,7 @@ class RealNVP(nn.Module):
         self.dim = dim
         self.prior = D.MultivariateNormal(torch.zeros(dim, device=device), torch.eye(dim, device=device))
         
+        # Alternating binary masks for coupling layers
         mask = torch.zeros(dim, device=device)
         mask[::2] = 1
         masks = [mask] + [1 - mask] * (n_layers - 1)
@@ -165,7 +166,7 @@ if 'model' not in st.session_state: st.session_state['model'] = None
 if 'data_tensor' not in st.session_state: st.session_state['data_tensor'] = None
 if 'col_config' not in st.session_state: st.session_state['col_config'] = {}
 if 'sim_results' not in st.session_state: st.session_state['sim_results'] = None
-if 'loss_history' not in st.session_state: st.session_state['loss_history'] = None # Store loss for persistence
+if 'loss_history' not in st.session_state: st.session_state['loss_history'] = None 
 
 # --- SIDEBAR: DATA SOURCE ---
 st.sidebar.header("1. Data Source")
@@ -294,26 +295,27 @@ if st.session_state['data_tensor'] is not None:
         
         st.subheader(f"3. Model Training (N={N_samples}, Dim={dim})")
         
-        # Training Parameters
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
+        # --- IMPROVED LAYOUT: 2 Columns instead of 4 ---
+        col_left, col_right = st.columns(2)
+        
+        with col_left:
             epochs = st.number_input("Epochs", 10, 5000, 300)
-        with col2:
+            # Fix: Use integer for slider (10-50), then divide by 100 in code
+            val_percent = st.slider("Validation Split (%)", 10, 50, 20, 5)
+            
+        with col_right:
             lr = st.number_input("Learning Rate", 1e-5, 1e-2, 1e-3, format="%.5f")
-        with col3:
-            # Added: Validation Split Slider
-            val_ratio = st.slider("Validation Split", 0.1, 0.5, 0.2, 0.05, format="%d%%")
-        with col4:
-            # Added: Early Stopping Option
             use_early_stopping = st.checkbox("Use Early Stopping", value=True)
-            patience = 20
             if use_early_stopping:
                 patience = st.number_input("Patience (Epochs)", 5, 100, 20)
+            else:
+                patience = 20 # Default dummy
         
         if st.button("Train SoloCausal Model"):
             data_tensor = st.session_state['data_tensor']
             
-            # --- 1. Split Data (Dynamic) ---
+            # --- 1. Split Data (Dynamic based on slider) ---
+            val_ratio = val_percent / 100.0
             val_size = int(val_ratio * N_samples)
             train_size = N_samples - val_size
             
@@ -392,7 +394,7 @@ if st.session_state['data_tensor'] is not None:
 
             st.session_state['model'] = model
             st.session_state['sim_results'] = None
-            st.session_state['loss_history'] = val_loss_hist # Store for persistence
+            st.session_state['loss_history'] = val_loss_hist 
             st.success(f"Model Trained! Best Val Loss: {min(val_loss_hist):.4f}")
             
         # --- 4. Plot Loss (Persistent) ---
