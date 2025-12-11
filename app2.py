@@ -335,6 +335,11 @@ if st.session_state['data_tensor'] is not None:
             fig, ax = plt.subplots(figsize=(8, 2))
             ax.plot(loss_hist)
             ax.set_title("Training Loss")
+
+            ax.set_yscale('log') 
+            ax.set_title("Training Loss (Log Scale)")
+            ax.grid(True, which="both", ls="--", alpha=0.5)
+            
             st.pyplot(fig)
 
 # --- INFERENCE ---
