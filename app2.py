@@ -456,7 +456,7 @@ if st.session_state['model'] is not None:
                     ax.plot(weeks, orig_traj, 'o-', label=label_orig, color='skyblue', linewidth=3, markersize=8)
                     ax.plot(weeks, cf_traj, 'o--', label=label_cf, color='lightcoral', linewidth=3, markersize=8)
                     
-                    ax.set_title(f"Outcome Trajectory: Original vs Counterfactual (Patient {patient_id_disp})", fontsize=16, fontweight='bold')
+                    ax.set_title(f"Outcome Trajectory: Original vs Counterfactual (Patient ID: {patient_id_disp})", fontsize=16, fontweight='bold')
                     ax.set_xlabel("Time Points", fontsize=12)
                     ax.set_ylabel("Outcome Value", fontsize=12)
                     ax.set_xticks(weeks)
